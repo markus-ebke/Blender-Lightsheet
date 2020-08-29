@@ -1,0 +1,5 @@
+[MASTER]
+ignore=__init__.py
+
+[MESSAGES CONTROL]
+disable=assignment-from-no-return,fixme,invalid-name

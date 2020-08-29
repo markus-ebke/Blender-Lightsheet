@@ -1,0 +1,6 @@
+[flake8]
+exclude =
+    .git,
+    __pycache__,
+    # imports in __init__.py are in wrong order, because we use importlib to reload them
+    __init__.py
