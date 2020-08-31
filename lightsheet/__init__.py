@@ -40,11 +40,12 @@ print("lightsheet __init__.py")
 if "bpy" in locals():
     import importlib
 
-    # importlib.reload(lightsheet modules)
+    importlib.reload(operators)
+    importlib.reload(ui)
 
     print("lighsheet reloaded")
 else:
-    # from lightsheet import lightsheet modules
+    from lightsheet import operators, ui
 
     print("lightsheet loaded")
 
@@ -53,7 +54,7 @@ from bpy.utils import register_class, unregister_class
 
 
 # registration
-classes = tuple()
+classes = (ui.LIGHTSHEET_PT_tools, operators.LIGHTSHEET_OT_create_lightsheet)
 
 
 def register():
