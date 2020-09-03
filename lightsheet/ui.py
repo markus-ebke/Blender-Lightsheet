@@ -39,18 +39,20 @@ class LIGHTSHEET_PT_tools(Panel):
     def draw(self, context):
         layout = self.layout
 
+        # here come the important operators
+        col = layout.column(align=True)
+        col.scale_y = 1.5
+        col.operator("lightsheet.create", icon='LIGHTPROBE_PLANAR')
+        col.operator("lightsheet.trace", icon='HIDE_OFF')
+
+        # debug info
+        layout.separator()
+        col = layout.column()
+        col.label(text="Debug info:", icon='INFO')
         obj = context.object
-
-        row = layout.row()
-        row.label(text="Hello world!", icon='WORLD_DATA')
-
         if obj is not None:
-            col = layout.column()
             col.prop(obj, "name")
             col.prop(obj, "type")
 
             if obj.type == 'LIGHT':
                 col.prop(obj.data, "type")
-
-        row = layout.row()
-        row.operator("lightsheet.create", icon='LIGHTPROBE_PLANAR')

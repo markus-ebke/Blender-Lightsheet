@@ -23,6 +23,9 @@
 LIGHTSHEET_OT_create_lightsheet: Create a lightsheet, uses the functions
 create_bmesh_square, create_bmesh_circle and create_bmesh_icosahedron to create
 lightsheets depending on light type.
+
+LIGHTSHEET_OT_trace_lighsheet: Trace the selected lightsheet and create caustic
+objects, tracing is done with functions from trace.py
 """
 
 from math import sqrt, tan
@@ -33,6 +36,8 @@ import bpy
 from bpy.types import Operator
 from mathutils import Vector
 from mathutils.geometry import barycentric_transform
+
+from lightsheet import material, trace
 
 print("lightsheet operators.py")
 
@@ -101,11 +106,10 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
             # icosahedron because lightsheet should surround the point light
             bm = create_bmesh_icosahedron(self.resolution)
 
-        # create id layer = vertex index
+        # create id layer and assign values
         bm_id = bm.verts.layers.int.new("id")
-        bm.verts.ensure_lookup_table()
-        for vert in bm.verts:
-            vert[bm_id] = vert.index
+        for idx, vert in enumerate(bm.verts):
+            vert[bm_id] = idx
 
         # think of a good name
         name = f"Lightsheet for {obj.name}"
@@ -250,3 +254,193 @@ def create_bmesh_icosahedron(resolution, radius=1):
 
     bm_template.free()
     return bm
+
+
+# -----------------------------------------------------------------------------
+# Trace lightsheet
+# -----------------------------------------------------------------------------
+class LIGHTSHEET_OT_trace_lightsheet(Operator):
+    """Trace rays from selected lightsheet to create caustics"""
+    bl_idname = "lightsheet.trace"
+    bl_label = "Trace Lightsheet"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    max_bounces: bpy.props.IntProperty(
+        name="Max Bounces", description="Maximum number of light bounces",
+        default=4, min=0
+    )
+
+    @classmethod
+    def poll(cls, context):
+        # operator makes sense only for lightsheets (must have light as parent)
+        obj = context.object
+        if obj is not None:
+            parent = obj.parent
+            return parent is not None and parent.type == 'LIGHT'
+
+        return False
+
+    def invoke(self, context, event):
+        obj = context.object
+        assert obj is not None and obj.parent.type == 'LIGHT', obj
+
+        # set max_bounces via dialog window
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self)
+
+    def execute(self, context):
+        start = time()
+
+        # context variables
+        scene = context.scene
+        view_layer = context.view_layer
+        depsgraph = context.evaluated_depsgraph_get()
+
+        # set globals for trace
+        trace.setup(scene, view_layer, depsgraph)
+
+        # lightsheet (source of rays) = active object
+        lightsheet = context.object
+        ls_mesh = lightsheet.to_mesh()
+
+        # apply modifiers and constraints to get final position of lightsheet
+        lightsheet_eval = lightsheet.evaluated_get(depsgraph)
+        matrix = lightsheet_eval.matrix_world.copy()
+
+        # verify that lightsheet has id layer = persistent vertex index, if not
+        # then create one and assign values
+        ls_id = ls_mesh.vertex_layers_int.get("id")
+        if ls_id is None:
+            ls_id = ls_mesh.vertex_layers_int.new(name="id")
+            for vert in ls_mesh.vertices:
+                ls_id.data[vert.index].value = vert.index
+
+        # check id data before we continue
+        assert all(ls_id.data[v.index].value != -1 for v in ls_mesh.vertices)
+
+        # hide lightsheets and caustics from raycast
+        hidden = []
+        for obj in view_layer.objects:
+            if "Lightsheet" in obj.name or "Caustic" in obj.name:
+                hidden.append((obj, obj.hide_viewport))
+                obj.hide_viewport = True
+
+        # raytrace lightsheet
+        light_type = lightsheet.parent.data.type
+        mode = "parallel" if light_type == 'SUN' else "point"
+        path_bm = trace.trace_lightsheet(ls_mesh, matrix, self.max_bounces,
+                                         mode)
+
+        # get or setup collection for caustics
+        coll = bpy.data.collections.get("Caustics")
+        if coll is None:
+            coll = bpy.data.collections.new("Caustics")
+            scene.collection.children.link(coll)
+
+        # get or setup caustic material
+        mat = bpy.data.materials.get("Caustic")
+        if mat is None:
+            # setup material node tree
+            mat = bpy.data.materials.new("Caustic")
+            material.setup_caustic_material(mat)
+
+        # fill in faces and convert to objects
+        ls_name = lightsheet.name
+        caustics = complete_caustics(ls_mesh, ls_name, path_bm, coll, mat)
+
+        # restore original state for hidden lightsheets and caustics
+        for obj, state in hidden:
+            obj.hide_viewport = state
+
+        # cleanup generated meshes and reset trace globals
+        lightsheet.to_mesh_clear()
+        trace.cleanup()
+
+        # report statistics
+        c_stats = "{} caustics".format(len(caustics))
+        t_stats = "{:.3f}s".format((time() - start))
+        message = f"Created {c_stats} in {t_stats}"
+        self.report({"INFO"}, message)
+
+        return {"FINISHED"}
+
+
+def complete_caustics(ls_mesh, ls_name, path_bm, collection, caustic_material):
+    ls_id = ls_mesh.vertex_layers_int["id"]
+
+    # check consistency
+    assert (ls_id.data[vert.index].value != -1 for vert in ls_mesh.vertices)
+
+    # create faces and turn bmeshes into objects
+    caustic_objects = []
+    for path, (bm, uv_dict, color_dict) in path_bm.items():
+        id_layer = bm.verts.layers.int["id"]
+        id_cache = {vert[id_layer]: vert for vert in bm.verts}
+        squeeze_layer = bm.loops.layers.uv["Caustic Squeeze"]
+
+        # create corresponding faces
+        for ls_face in ls_mesh.polygons:
+            caustic_verts = []
+            for ls_vert_index in ls_face.vertices:
+                ls_vert_id = ls_id.data[ls_vert_index].value
+                vert = id_cache.get(ls_vert_id)
+                if vert is not None:
+                    caustic_verts.append(vert)
+
+            # create edge or face from vertices
+            if len(caustic_verts) == 2:
+                # can only create an edge here, but this edge may already exist
+                # if we worked through a neighboring face before
+                if bm.edges.get(caustic_verts) is None:
+                    bm.edges.new(caustic_verts)
+            elif len(caustic_verts) > 2:
+                caustic_face = bm.faces.new(caustic_verts)
+
+                # set squeeze factor = ratio of source area to projected area
+                squeeze = ls_face.area / caustic_face.calc_area()
+                for loop in caustic_face.loops:
+                    # TODO can we use the u-coordinate for something useful?
+                    loop[squeeze_layer].uv = (0, squeeze)
+
+        # set transplanted uv-coordinates and vertex colors
+        uv_layer = bm.loops.layers.uv["Transplanted UVMap"]
+        color_layer = bm.loops.layers.color["Caustic Tint"]
+        for face in bm.faces:
+            for loop in face.loops:
+                vert_id = loop.vert[id_layer]
+                if uv_dict:  # only set uv-coords if we have uv-coords
+                    loop[uv_layer].uv = uv_dict[vert_id]
+                loop[color_layer] = tuple(color_dict[vert_id]) + (1,)
+
+        # think of a good name
+        name = f"Caustic of {ls_name}"
+        for obj, interaction in path:
+            name += f" -> {obj.name} ({interaction})"
+
+        # parent of caustic = last object
+        obj, interaction = path[-1]
+        assert interaction == "diffuse", path[-1]  # check consistency of path
+
+        # if we didn't copy any uv-coordinates from object, then we don't need
+        # the transplanted uvmap layer
+        if not uv_dict:
+            assert not obj.data.uv_layers, obj.data.uv_layers[:]
+            bm.loops.layers.uv.remove(uv_layer)
+
+        # new mesh data block
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me)
+        bm.free()
+
+        # before setting parent, undo parent transform
+        me.transform(obj.matrix_world.inverted())
+
+        # new object with given mesh
+        caustic = bpy.data.objects.new(name, me)
+        caustic.parent = obj
+        caustic.data.materials.append(caustic_material)
+
+        collection.objects.link(caustic)
+        caustic_objects.append(caustic)
+
+    return caustic_objects

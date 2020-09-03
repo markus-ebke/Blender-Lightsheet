@@ -54,7 +54,11 @@ from bpy.utils import register_class, unregister_class
 
 
 # registration
-classes = (ui.LIGHTSHEET_PT_tools, operators.LIGHTSHEET_OT_create_lightsheet)
+classes = (
+    ui.LIGHTSHEET_PT_tools,
+    operators.LIGHTSHEET_OT_create_lightsheet,
+    operators.LIGHTSHEET_OT_trace_lightsheet,
+)
 
 
 def register():
