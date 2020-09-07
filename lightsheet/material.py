@@ -35,11 +35,11 @@ print("lightsheet material.py")
 Interaction = namedtuple("Interaction", ["kind", "outgoing", "tint"])
 Interaction.__doc__ = """Type of ray after surface interaction.
 
-    kind (str): one of "diffuse", "reflect", "refract" or "transparent"
+    kind (str): one of 'DIFFUSE', 'REFLECT', 'REFRACT' or 'TRANSPARENT'
     outgoing (mathutils.Vector or None): new ray direction
     tint (mathutils.Color or None): tint from surface in this direction
 
-    If kind == "diffuse" then outgoing and tint will not be used and are None.
+    If kind == 'DIFFUSE' then outgoing and tint will not be used and are None.
     """
 
 # -----------------------------------------------------------------------------
@@ -118,7 +118,7 @@ def invalid_surface_shader(ray_direction, normal):
 
 def diffuse_surface_shader(ray_direction, normal):
     # caustic on object, but no tracing of further rays
-    return [("diffuse", None, None)]
+    return [('DIFFUSE', None, None)]
 
 
 # setup surface interaction from BSDF node ------------------------------------
@@ -140,7 +140,7 @@ def setup_node_glossy(node):
 
     def surface_shader(ray_direction, normal):
         refle = ray_direction.reflect(normal)
-        return [("reflect", refle, color)]
+        return [('REFLECT', refle, color)]
 
     return surface_shader
 
@@ -152,7 +152,7 @@ def setup_node_transparent(node):
     color = Color(node.inputs['Color'].default_value[:3])
 
     def surface_shader(ray_direction, normal):
-        return [("transparent", ray_direction, color)]
+        return [('TRANSPARENT', ray_direction, color)]
 
     return surface_shader
 
@@ -172,7 +172,7 @@ def setup_node_refraction(node):
     def surface_shader(ray_direction, normal):
         refra = refract(ray_direction, normal, ior)
         if refra is not None:
-            return [("refract", refra, color)]
+            return [('REFRACT', refra, color)]
         else:
             return []
 
@@ -198,13 +198,13 @@ def setup_node_glass(node):
 
         if refra is None:
             # total internal reflection
-            return [("reflect", refle, color)]
+            return [('REFLECT', refle, color)]
 
         # reflection and refraction
         reflectivity = fresnel(ray_direction, normal, ior)
         interactions = [
-            ("reflect", refle, reflectivity * color),
-            ("refract", refra, (1 - reflectivity) * color)
+            ('REFLECT', refle, reflectivity * color),
+            ('REFRACT', refra, (1 - reflectivity) * color)
         ]
         return interactions
 
@@ -267,17 +267,17 @@ def setup_node_principled(node):
 
         interactions = []
         if handle_diffuse:
-            interactions.append(("diffuse", None, None))
+            interactions.append(('DIFFUSE', None, None))
 
         if refle_tint.v > 0:
             # some light is reflected
             refle = ray_direction.reflect(normal)
-            interactions.append(("reflect", refle, refle_tint))
+            interactions.append(('REFLECT', refle, refle_tint))
 
         if refra_tint.v > 0 and handle_refraction:
             # some light is transmitted
             refra = refract(ray_direction, normal, ior)
-            interactions.append(("refract", refra, refra_tint))
+            interactions.append(('REFRACT', refra, refra_tint))
 
         return interactions
 
@@ -369,11 +369,11 @@ def setup_node_mix(node):
         interactions = []
 
         # diffuse
-        if "diffuse" in interactions_map1 or "diffuse" in interactions_map2:
-            interactions.append(("diffuse", None, None))
+        if 'DIFFUSE' in interactions_map1 or 'DIFFUSE' in interactions_map2:
+            interactions.append(('DIFFUSE', None, None))
 
         # all other interactions
-        for kind in ["reflect", "refract", "transparent"]:
+        for kind in ['REFLECT', 'REFRACT', 'TRANSPARENT']:
             vec1, col1 = interactions_map1.get(kind, (None, None))
             vec2, col2 = interactions_map2.get(kind, (None, None))
             if vec1 is not None:
@@ -421,9 +421,13 @@ def get_material_shader(mat):
 
     # check if material is valid and uses nodes
     if mat is None or not mat.use_nodes:
-        # default material: diffuse, no caustic rays
-        print(f"{mat.name}: material doesn't use nodes => diffuse")
+        if mat is None:
+            print("default material: diffuse")
+        else:
+            assert not mat.use_nodes
+            print(f"{mat.name}: material doesn't use nodes => diffuse")
 
+        # default material: diffuse, no caustic rays
         materials_cache[mat] = (diffuse_surface_shader, None)
         return (diffuse_surface_shader, None)
 
@@ -620,15 +624,19 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     output.target = 'EEVEE'
     mix_rgb_diffuse.blend_type = 'MULTIPLY'
     mix_rgb_diffuse.inputs['Fac'].default_value = 1.0
+    mix_rgb_diffuse.inputs['Color1'].default_value = (1.0, 1.0, 1.0, 1.0)
     math.operation = 'MULTIPLY'
     checker.inputs['Color1'].default_value = (1.0, 0.0, 1.0, 1.0)
     checker.inputs['Color2'].default_value = (0.0, 1.0, 0.0, 1.0)
     checker.inputs['Scale'].default_value = 42.0
     checker.label = "Original Diffuse Color"
+    checker.use_custom_color = True
+    checker.color = (1.0, 0.0, 0.0)
     mix_rgb_light.blend_type = 'MULTIPLY'
     mix_rgb_light.inputs['Fac'].default_value = 1.0
     energy.label = "Light Energy"
-    uv_map.uv_map = parent_obj.data.uv_layers.active.name
+    if parent_obj.data.uv_layers.active:
+        uv_map.uv_map = parent_obj.data.uv_layers.active.name
     color.label = "Light Color"
     vertex_color.layer_name = 'Caustic Tint'
     uv_squeeze.uv_map = 'Caustic Squeeze'

@@ -365,7 +365,6 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 def convert_to_objects(lightsheet, path_bm):
     """Convert caustic bmeshes to blender objects with filled in faces."""
     ls_mesh = lightsheet.to_mesh()
-    ls_name = lightsheet.name
     ls_id = ls_mesh.vertex_layers_int["id"]
 
     # check consistency
@@ -375,8 +374,9 @@ def convert_to_objects(lightsheet, path_bm):
     caustic_objects = []
     for path, (bm, uv_dict, color_dict) in path_bm.items():
         # parent of caustic = last object
-        parent_obj = path[-1][0]
-        assert path[-1][1] == "diffuse", path[-1]  # check consistency of path
+        last_link = path[-1]
+        parent_obj = last_link.object
+        assert last_link.kind == 'DIFFUSE', path  # check consistency of path
 
         id_layer = bm.verts.layers.int["id"]
         id_cache = {vert[id_layer]: vert for vert in bm.verts}
@@ -416,16 +416,14 @@ def convert_to_objects(lightsheet, path_bm):
                     loop[uv_layer].uv = uv_dict[vert_id]
                 loop[color_layer] = tuple(color_dict[vert_id]) + (1,)
 
-        # think of a good name
-        name = f"Caustic of {ls_name}"
-        for obj, interaction, _ in path:
-            name += f" -> {obj.name} ({interaction})"
-
         # if we didn't copy any uv-coordinates from the parent object, then we
         # don't need the transplanted uvmap layer
         if not uv_dict:
             assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
             bm.loops.layers.uv.remove(uv_layer)
+
+        # think of a good name
+        name = f"Caustic of {lightsheet.name} on {parent_obj.name}"
 
         # new mesh data block
         me = bpy.data.meshes.new(name)
@@ -445,6 +443,14 @@ def convert_to_objects(lightsheet, path_bm):
         # new object with given mesh
         caustic = bpy.data.objects.new(name, me)
         caustic.parent = parent_obj
+
+        # fill out caustic_info property
+        caustic.caustic_info.lightsheet = lightsheet
+        caustic_path = caustic.caustic_info.path
+        for obj, kind, _ in path:
+            item = caustic_path.add()
+            item.object = obj
+            item.kind = kind
 
         # get or setup caustic material
         mat = material.get_caustic_material(lightsheet.parent, parent_obj)

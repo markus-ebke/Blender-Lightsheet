@@ -61,7 +61,7 @@ Link = namedtuple("Link", ["object", "kind", "volume_params"])
 Link.__doc__ = """One link in the chain of interactions of a ray.
 
     Includes the object that was hit, the kind of interaction as a string (one
-    of "diffuse", "reflect", "refract", "transparent") and any volume
+    of 'DIFFUSE', 'REFLECT', 'REFRACT', 'TRANSPARENT') and any volume
     parameters as a tuple.
     """
 
@@ -184,15 +184,16 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
         # diffuse interactions will show reflective or refractive caustics,
         # non-diffuse interactions will add new rays if the new path is not
         # longer than the bounce limit
-        if kind == "diffuse":
-            # add caustic vert if it is a reflective or refractive caustic
-            if any(step[1] in {"reflect", "refract"} for step in old_path):
+        if kind == 'DIFFUSE':
+            # add vertex to caustic only for reflective and refractive caustics
+            if any(step[1] in {'REFLECT', 'REFRACT'} for step in old_path):
                 # get the caustic bmesh for this chain of interactions
-                caustic_path = old_path + (Link(obj, "diffuse", None),)
+                caustic_path = old_path + (Link(obj, kind, None),)
                 bm, uv_dict, color_dict = path_bm[tuple(caustic_path)]
 
-                # create caustic vertex slightly above object
-                position = location + 2e-4 * face.normal  # is 2e-5 enough?
+                # create caustic vertex in front of object
+                offset = copysign(1e-4, -ray_direction.dot(face.normal))
+                position = location + offset * face.normal
                 vert = bm.verts.new(position)
 
                 # set vertex id so that we can find its source vertex later
@@ -215,7 +216,7 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
             if old_path:
                 previous_link = old_path[-1]
                 if previous_link.volume_params is not None:
-                    assert previous_link.kind in {"refraction", "transparent"}
+                    assert previous_link.kind in {'REFRACT', 'TRANSPARENT'}
                     # compute transmittance via Beer-Lambert law
                     volume_color, volume_density = previous_link.volume_params
                     ray_length = (location - ray_origin).length
@@ -228,7 +229,7 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
 
             # extend path of ray
             headed_inside = new_direction.dot(normal) < 0
-            if kind in {"refraction", "transparent"} and headed_inside:
+            if kind in {'REFRACT', 'TRANSPARENT'} and headed_inside:
                 # consider volume absorption
                 new_path = old_path + (Link(obj, kind, volume_params),)
             else:

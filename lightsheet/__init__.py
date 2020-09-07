@@ -41,11 +41,12 @@ if "bpy" in locals():
     import importlib
 
     importlib.reload(operators)
+    importlib.reload(properties)
     importlib.reload(ui)
 
     print("lighsheet reloaded")
 else:
-    from lightsheet import operators, ui
+    from lightsheet import operators, properties, ui
 
     print("lightsheet loaded")
 
@@ -56,8 +57,11 @@ from bpy.utils import register_class, unregister_class
 # registration
 classes = (
     ui.LIGHTSHEET_PT_tools,
+    ui.LIGHTSHEET_PT_caustic,
     operators.LIGHTSHEET_OT_create_lightsheet,
     operators.LIGHTSHEET_OT_trace_lightsheet,
+    properties.CausticPathLink,
+    properties.CausticInfo,
 )
 
 
@@ -66,10 +70,12 @@ def register():
     for cls in classes:
         print("register", cls)
         register_class(cls)
+    bpy.types.Object.caustic_info = bpy.props.PointerProperty(type=properties.CausticInfo)
 
 
 def unregister():
     print("unregister lightsheet")
+    del bpy.types.Object.caustic_info
     for cls in reversed(classes):
         print("unregister", cls)
         unregister_class(cls)
