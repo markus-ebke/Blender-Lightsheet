@@ -36,7 +36,7 @@ Helper functions:
 """
 
 from collections import defaultdict, namedtuple
-from math import copysign
+from math import copysign, exp
 
 import bmesh
 from mathutils import Color, Vector
@@ -57,11 +57,12 @@ Ray.__doc__ = """Record ray information for tracing.
     already taken raypath (a tuple of Link instances).
     """
 
-Link = namedtuple("Link", ["object", "kind"])
+Link = namedtuple("Link", ["object", "kind", "volume_params"])
 Link.__doc__ = """One link in the chain of interactions of a ray.
 
     Includes the object that was hit, the kind of interaction as a string (one
-    of "diffuse", "reflect", "refract", "transparent").
+    of "diffuse", "reflect", "refract", "transparent") and any volume
+    parameters as a tuple.
     """
 
 
@@ -178,7 +179,7 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
 
     # determine surface interactions from material (i.e. does the ray
     # continue and if yes, how?)
-    surface_shader = material.get_material_shader(mat)
+    surface_shader, volume_params = material.get_material_shader(mat)
     for kind, new_direction, tint in surface_shader(ray_direction, normal):
         # diffuse interactions will show reflective or refractive caustics,
         # non-diffuse interactions will add new rays if the new path is not
@@ -187,7 +188,7 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
             # add caustic vert if it is a reflective or refractive caustic
             if any(step[1] in {"reflect", "refract"} for step in old_path):
                 # get the caustic bmesh for this chain of interactions
-                caustic_path = old_path + (Link(obj, "diffuse"),)
+                caustic_path = old_path + (Link(obj, "diffuse", None),)
                 bm, uv_dict, color_dict = path_bm[tuple(caustic_path)]
 
                 # create caustic vertex slightly above object
@@ -209,12 +210,30 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
             offset = copysign(1e-5, new_direction.dot(face.normal))
             new_origin = location + offset * face.normal
 
+            # compute volume absorption from previous interaction
+            volume = (1.0, 1.0, 1.0)
+            if old_path:
+                previous_link = old_path[-1]
+                if previous_link.volume_params is not None:
+                    assert previous_link.kind in {"refraction", "transparent"}
+                    # compute transmittance via Beer-Lambert law
+                    volume_color, volume_density = previous_link.volume_params
+                    ray_length = (location - ray_origin).length
+                    volume = (exp(-(1 - val) * volume_density * ray_length)
+                              for val in volume_color)
+
             # tint the color of the new ray
-            mult = (c * t for c, t in zip(color, tint))
+            mult = (c * t * v for (c, t, v) in zip(color, tint, volume))
             new_color = Color(mult)
 
             # extend path of ray
-            new_path = old_path + (Link(obj, kind),)
+            headed_inside = new_direction.dot(normal) < 0
+            if kind in {"refraction", "transparent"} and headed_inside:
+                # consider volume absorption
+                new_path = old_path + (Link(obj, kind, volume_params),)
+            else:
+                # no volume absorption necessary
+                new_path = old_path + (Link(obj, kind, None),)
 
             # trace new ray
             new_ray = Ray(new_origin, new_direction, new_color, new_path)

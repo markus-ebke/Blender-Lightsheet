@@ -114,20 +114,25 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         # think of a good name
         name = f"Lightsheet for {obj.name}"
 
-        # convert bmesh to mesh data block
+        # convert bmesh to mesh data block and create new object
         me = bpy.data.meshes.new(name)
         bm.to_mesh(me)
         bm.free()
-
-        # create new object and adjust draw/render mode
         lightsheet = bpy.data.objects.new(name, me)
-        lightsheet.parent = obj
+
+        # adjust drawing and visibility
         lightsheet.display_type = 'WIRE'
         lightsheet.hide_render = True
+        lightsheet.cycles_visibility.camera = False
+        lightsheet.cycles_visibility.shadow = False
+        lightsheet.cycles_visibility.diffuse = False
+        lightsheet.cycles_visibility.transmission = False
+        lightsheet.cycles_visibility.scatter = False
 
-        # add to scene collection
+        # add to scene
         coll = context.scene.collection
         coll.objects.link(lightsheet)
+        lightsheet.parent = obj
 
         # report statistics
         v_stats = "{} vertices".format(len(me.vertices))
@@ -302,8 +307,6 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         # lightsheet (source of rays) = active object
         lightsheet = context.object
         ls_mesh = lightsheet.to_mesh()
-
-        # apply modifiers and constraints to get final position of lightsheet
         lightsheet_eval = lightsheet.evaluated_get(depsgraph)
         matrix = lightsheet_eval.matrix_world.copy()
 
@@ -325,11 +328,12 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
                 hidden.append((obj, obj.hide_viewport))
                 obj.hide_viewport = True
 
-        # raytrace lightsheet
+        # raytrace lightsheet and convert resulting caustics to objects
         light_type = lightsheet.parent.data.type
         mode = "parallel" if light_type == 'SUN' else "point"
-        path_bm = trace.trace_lightsheet(ls_mesh, matrix, self.max_bounces,
-                                         mode)
+        path_bm = trace.trace_lightsheet(
+            ls_mesh, matrix, self.max_bounces, mode)
+        caustics = convert_to_objects(lightsheet, path_bm)
 
         # get or setup collection for caustics
         coll = bpy.data.collections.get("Caustics")
@@ -337,16 +341,9 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
             coll = bpy.data.collections.new("Caustics")
             scene.collection.children.link(coll)
 
-        # get or setup caustic material
-        mat = bpy.data.materials.get("Caustic")
-        if mat is None:
-            # setup material node tree
-            mat = bpy.data.materials.new("Caustic")
-            material.setup_caustic_material(mat)
-
-        # fill in faces and convert to objects
-        ls_name = lightsheet.name
-        caustics = complete_caustics(ls_mesh, ls_name, path_bm, coll, mat)
+        # add caustic objects to caustic collection
+        for obj in caustics:
+            coll.objects.link(obj)
 
         # restore original state for hidden lightsheets and caustics
         for obj, state in hidden:
@@ -365,7 +362,10 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         return {"FINISHED"}
 
 
-def complete_caustics(ls_mesh, ls_name, path_bm, collection, caustic_material):
+def convert_to_objects(lightsheet, path_bm):
+    """Convert caustic bmeshes to blender objects with filled in faces."""
+    ls_mesh = lightsheet.to_mesh()
+    ls_name = lightsheet.name
     ls_id = ls_mesh.vertex_layers_int["id"]
 
     # check consistency
@@ -374,6 +374,10 @@ def complete_caustics(ls_mesh, ls_name, path_bm, collection, caustic_material):
     # create faces and turn bmeshes into objects
     caustic_objects = []
     for path, (bm, uv_dict, color_dict) in path_bm.items():
+        # parent of caustic = last object
+        parent_obj = path[-1][0]
+        assert path[-1][1] == "diffuse", path[-1]  # check consistency of path
+
         id_layer = bm.verts.layers.int["id"]
         id_cache = {vert[id_layer]: vert for vert in bm.verts}
         squeeze_layer = bm.loops.layers.uv["Caustic Squeeze"]
@@ -414,17 +418,13 @@ def complete_caustics(ls_mesh, ls_name, path_bm, collection, caustic_material):
 
         # think of a good name
         name = f"Caustic of {ls_name}"
-        for obj, interaction in path:
+        for obj, interaction, _ in path:
             name += f" -> {obj.name} ({interaction})"
 
-        # parent of caustic = last object
-        obj, interaction = path[-1]
-        assert interaction == "diffuse", path[-1]  # check consistency of path
-
-        # if we didn't copy any uv-coordinates from object, then we don't need
-        # the transplanted uvmap layer
+        # if we didn't copy any uv-coordinates from the parent object, then we
+        # don't need the transplanted uvmap layer
         if not uv_dict:
-            assert not obj.data.uv_layers, obj.data.uv_layers[:]
+            assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
             bm.loops.layers.uv.remove(uv_layer)
 
         # new mesh data block
@@ -432,15 +432,24 @@ def complete_caustics(ls_mesh, ls_name, path_bm, collection, caustic_material):
         bm.to_mesh(me)
         bm.free()
 
+        # rename transplanted uvmap to avoid confusion
+        if uv_dict:
+            parent_uv_layer = parent_obj.data.uv_layers.active
+            assert parent_obj.data.uv_layers.active is not None
+            uv_layer = me.uv_layers["Transplanted UVMap"]
+            uv_layer.name = parent_uv_layer.name
+
         # before setting parent, undo parent transform
-        me.transform(obj.matrix_world.inverted())
+        me.transform(parent_obj.matrix_world.inverted())
 
         # new object with given mesh
         caustic = bpy.data.objects.new(name, me)
-        caustic.parent = obj
-        caustic.data.materials.append(caustic_material)
+        caustic.parent = parent_obj
 
-        collection.objects.link(caustic)
+        # get or setup caustic material
+        mat = material.get_caustic_material(lightsheet.parent, parent_obj)
+        caustic.data.materials.append(mat)
+
         caustic_objects.append(caustic)
 
     return caustic_objects
