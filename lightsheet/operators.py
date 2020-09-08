@@ -135,11 +135,10 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         lightsheet.parent = obj
 
         # report statistics
-        v_stats = "{} vertices".format(len(me.vertices))
-        f_stats = "{} faces".format(len(me.polygons))
-        t_stats = "{:.1f}ms".format((time() - start) * 1000)
-        message = f"Created {v_stats} and {f_stats} in {t_stats}"
-        self.report({"INFO"}, message)
+        v_stats = "{:,} vertices".format(len(me.vertices))
+        f_stats = "{:,} faces".format(len(me.polygons))
+        t_stats = "{:.3f}s".format((time() - start))
+        self.report({"INFO"}, f"Created {v_stats} and {f_stats} in {t_stats}")
 
         return {"FINISHED"}
 
@@ -265,7 +264,7 @@ def create_bmesh_icosahedron(resolution, radius=1):
 # Trace lightsheet
 # -----------------------------------------------------------------------------
 class LIGHTSHEET_OT_trace_lightsheet(Operator):
-    """Trace rays from selected lightsheet to create caustics"""
+    """Trace rays from active lightsheet and create caustics"""
     bl_idname = "lightsheet.trace"
     bl_label = "Trace Lightsheet"
     bl_options = {'REGISTER', 'UNDO'}
@@ -289,7 +288,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         obj = context.object
         assert obj is not None and obj.parent.type == 'LIGHT', obj
 
-        # set max_bounces via dialog window
+        # set properties via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
@@ -355,9 +354,8 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 
         # report statistics
         c_stats = "{} caustics".format(len(caustics))
-        t_stats = "{:.3f}s".format((time() - start))
-        message = f"Created {c_stats} in {t_stats}"
-        self.report({"INFO"}, message)
+        t_stats = "{:.1f}s".format((time() - start))
+        self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
 
         return {"FINISHED"}
 
@@ -459,3 +457,167 @@ def convert_to_objects(lightsheet, path_bm):
         caustic_objects.append(caustic)
 
     return caustic_objects
+
+
+# -----------------------------------------------------------------------------
+# Finalize caustics
+# -----------------------------------------------------------------------------
+class LIGHTSHEET_OT_finalize(Operator):
+    """Smooth and cleanup selected caustics"""
+    bl_idname = "lightsheet.finalize"
+    bl_label = "Finalize Caustic"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    intensity_threshold: bpy.props.FloatProperty(
+        name="Intensity Treshold",
+        description="Remove faces less intense than this cutoff",
+        default=0.00001, min=0.0, precision=6
+    )
+    delete_empty_caustics: bpy.props.BoolProperty(
+        name="Delete empty caustics",
+        description="If after cleanup no faces remain, delete the caustic",
+        default=True
+    )
+
+    @classmethod
+    def poll(cls, context):
+        # operator makes sense only if some caustics are selected
+        objects = context.selected_objects
+        if objects:
+            return any(len(obj.caustic_info.path) > 0 for obj in objects)
+        return False
+
+    def invoke(self, context, event):
+        # set properties via dialog window
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self)
+
+    def execute(self, context):
+        start = time()
+
+        finalized, skipped, deleted = 0, 0, 0
+        for obj in context.selected_objects:
+            # skip objects that are not caustics or are already finalized
+            if not obj.caustic_info.path or obj.caustic_info.finalized:
+                skipped += 1
+                continue
+
+            # convert from object and setup layer access
+            bm = bmesh.new()
+            bm.from_mesh(obj.data)
+
+            # smooth out
+            smooth_caustic_squeeze(bm)
+
+            # cleanup
+            cleanup_caustic(bm, intensity_threshold=self.intensity_threshold)
+
+            # if no faces remain, delete the caustic (if wanted by the user)
+            if len(bm.faces) == 0 and self.delete_empty_caustics:
+                bm.free()
+                bpy.data.objects.remove(obj)
+                deleted += 1
+                continue
+
+            # TODO for cycles overlapping faces should be stacked in layers
+
+            # convert bmesh back to object
+            bm.to_mesh(obj.data)
+            bm.free()
+
+            # mark as finalized
+            obj.caustic_info.finalized = True
+            finalized += 1
+
+        # report statistics
+        f_stats = f"Finalized {finalized}"
+        s_stats = f"skipped {skipped}"
+        d_stats = f"deleted {deleted}"
+        t_stats = "{:.3f}s".format((time() - start))
+        if self.delete_empty_caustics:
+            message = f"{f_stats}, {s_stats}, {d_stats} in {t_stats}"
+            self.report({"INFO"}, message)
+        else:
+            self.report({"INFO"}, f"{f_stats}, {s_stats} in {t_stats}")
+
+        return {"FINISHED"}
+
+
+def smooth_caustic_squeeze(bm):
+    """Poke faces and smooth out caustic squeeze."""
+    squeeze_layer = bm.loops.layers.uv["Caustic Squeeze"]
+
+    # poke every face (i.e. place a vertex in the middle)
+    result = bmesh.ops.poke(bm, faces=bm.faces)
+
+    # interpolate squeeze for the original vertices
+    poked_verts = set(result["verts"])
+    for vert in bm.verts:
+        # skip the new vertices
+        if vert in poked_verts:
+            continue
+
+        # find neighbouring poked vertices (= original faces)
+        poked_squeeze = dict()
+        for loop in vert.link_loops:
+            for other_vert in loop.face.verts:
+                if other_vert in poked_verts:
+                    squeeze = loop[squeeze_layer].uv[1]
+                    poked_squeeze[other_vert] = squeeze
+
+        # cannot process vertices that are not connected to a face, these
+        # vertices will be removed anyway
+        if len(poked_squeeze) == 0:
+            assert len(vert.link_faces) == 0
+            break
+
+        # interpolate squeeze of original vertex from squeeze of neighbouring
+        # original faces, weight each face according to its distance (note that
+        # there is a correct solution that we could find via tracing rays that
+        # start very close to the source lightsheet vertex)
+        weightsum = 0.0
+        squeeze = 0.0
+        for other_vert in poked_squeeze:
+            dist = (other_vert.co - vert.co).length
+            assert dist > 0
+            weight = 1 / dist**2  # an arbitrary but sensible choice
+            weightsum += weight
+            squeeze += weight * poked_squeeze[other_vert]
+        squeeze /= weightsum
+
+        # set squeeze for this vertex
+        for loop in vert.link_loops:
+            loop[squeeze_layer].uv[1] = squeeze
+
+
+def cleanup_caustic(bm, intensity_threshold):
+    """Remove invisible faces and cleanup resulting mesh."""
+    squeeze_layer = bm.loops.layers.uv["Caustic Squeeze"]
+    color_layer = bm.loops.layers.color["Caustic Tint"]
+
+    # remove faces with intensity less than intensity_threshold
+    invisible_faces = []
+    for face in bm.faces:
+        invisible = True
+        for loop in face.loops:
+            squeeze = loop[squeeze_layer].uv[1]
+            tint_v = max(loop[color_layer][:3])  # = Color(...).v
+            if squeeze * tint_v > intensity_threshold:
+                # vertex is intense enough, face is visible
+                invisible = False
+                break
+
+        if invisible:
+            invisible_faces.append(face)
+
+    bmesh.ops.delete(bm, geom=invisible_faces, context='FACES_ONLY')
+
+    # clean up mesh, remove vertices and edges not connected to faces
+    lonely_verts = [ve for ve in bm.verts if len(ve.link_faces) == 0]
+    bmesh.ops.delete(bm, geom=lonely_verts, context='VERTS')
+    lonely_edges = [ed for ed in bm.edges if len(ed.link_faces) == 0]
+    bmesh.ops.delete(bm, geom=lonely_edges, context='EDGES')
+
+    # check if cleanup was successful
+    assert not [ve for ve in bm.verts if len(ve.link_faces) == 0]
+    assert not [ed for ed in bm.edges if len(ed.link_faces) == 0]

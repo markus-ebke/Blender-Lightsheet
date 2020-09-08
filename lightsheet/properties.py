@@ -21,7 +21,8 @@
 """Custom Properties to keep track of certain information."""
 
 import bpy
-from bpy.props import CollectionProperty, EnumProperty, PointerProperty
+from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
+                       PointerProperty)
 
 
 class CausticPathLink(bpy.types.PropertyGroup):
@@ -51,3 +52,6 @@ class CausticInfo(bpy.types.PropertyGroup):
         type=CausticPathLink,
         name="Lightsheet path",
         description="Path of the lightrays to this caustic")
+    finalized: BoolProperty(
+        name="Finalized", description="If caustic has been finalized",
+        default=False)

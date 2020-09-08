@@ -45,13 +45,17 @@ class LIGHTSHEET_PT_tools(Panel):
             col = layout.column()
             col.label(text=f"Active object: '{obj.name}'", icon='OBJECT_DATA')
             if obj.type == 'LIGHT':
-                col.label(text=f"Active object is light", icon='LIGHT')
+                col.label(text="Object is light source", icon='LIGHT')
             elif obj.type == 'MESH':
                 if obj.parent is not None and obj.parent.type == 'LIGHT':
-                    col.label(text=f"Active object is lightsheet",
-                              icon='LIGHTPROBE_PLANAR')
+                    txt = "Object is lightsheet"
+                    col.label(text=txt, icon='LIGHTPROBE_PLANAR')
                 elif obj.caustic_info.path:
-                    col.label(text="Active object is caustic", icon='SHADERFX')
+                    if obj.caustic_info.finalized:
+                        txt = "Object is caustic (finalized)"
+                    else:
+                        txt = "Object is caustic"
+                    col.label(text=txt, icon='SHADERFX')
 
         # prepare layout for important operators
         col = layout.column(align=True)
@@ -60,6 +64,7 @@ class LIGHTSHEET_PT_tools(Panel):
         # here come the important operators
         col.operator("lightsheet.create", icon='LIGHTPROBE_PLANAR')
         col.operator("lightsheet.trace", icon='HIDE_OFF')
+        col.operator("lightsheet.finalize", icon='SHADERFX')
 
 
 class LIGHTSHEET_PT_caustic(Panel):

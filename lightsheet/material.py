@@ -452,7 +452,7 @@ def get_material_shader(mat):
         volume_node = volume_links[0].from_node
         if volume_node.type == 'VOLUME_ABSORPTION':
             volume_params = (
-                Color(volume_node.inputs['Color'].default_value[:3]),
+                Color(volume_node.inputs['Color'].default_value[:3]).freeze(),
                 volume_node.inputs['Density'].default_value
             )
 

@@ -60,6 +60,7 @@ classes = (
     ui.LIGHTSHEET_PT_caustic,
     operators.LIGHTSHEET_OT_create_lightsheet,
     operators.LIGHTSHEET_OT_trace_lightsheet,
+    operators.LIGHTSHEET_OT_finalize,
     properties.CausticPathLink,
     properties.CausticInfo,
 )
@@ -70,7 +71,8 @@ def register():
     for cls in classes:
         print("register", cls)
         register_class(cls)
-    bpy.types.Object.caustic_info = bpy.props.PointerProperty(type=properties.CausticInfo)
+    bpy.types.Object.caustic_info = bpy.props.PointerProperty(
+        type=properties.CausticInfo)
 
 
 def unregister():
