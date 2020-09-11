@@ -34,8 +34,6 @@ bl_info = {
     "category": "Lighting",
 }
 
-print("lightsheet __init__.py")
-
 # support reloading scripts and addons
 if "bpy" in locals():
     import importlib
@@ -60,26 +58,24 @@ classes = (
     ui.LIGHTSHEET_PT_caustic,
     operators.LIGHTSHEET_OT_create_lightsheet,
     operators.LIGHTSHEET_OT_trace_lightsheet,
-    operators.LIGHTSHEET_OT_finalize,
+    operators.LIGHTSHEET_OT_finalize_caustics,
     properties.CausticPathLink,
     properties.CausticInfo,
 )
 
 
 def register():
-    print("register lightsheet")
     for cls in classes:
-        print("register", cls)
         register_class(cls)
+
     bpy.types.Object.caustic_info = bpy.props.PointerProperty(
         type=properties.CausticInfo)
 
 
 def unregister():
-    print("unregister lightsheet")
     del bpy.types.Object.caustic_info
+
     for cls in reversed(classes):
-        print("unregister", cls)
         unregister_class(cls)
 
 

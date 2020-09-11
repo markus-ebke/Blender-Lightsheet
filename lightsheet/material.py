@@ -18,10 +18,16 @@
 #  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 # ##### END GPL LICENSE BLOCK #####
-"""Functions for handling materials for tracing and setup of caustic node tree.
+"""Handle materials for tracing lightsheets and setup of caustic node trees.
 
 The main function that handles materials for tracing is get_material_shader,
 it uses the setup_node_<...>-functions to process the active surface node.
+
+A caustic material is created via get_caustic_material, it will add nodes for
+Cycles, EEVEE and add drivers for light strength and color.
+
+Note that after tracing you should cleanup the cached material shaders via
+material.materials_cache.clear()
 """
 
 from collections import namedtuple
@@ -30,8 +36,10 @@ from math import sqrt
 import bpy
 from mathutils import Color
 
-print("lightsheet material.py")
-
+# -----------------------------------------------------------------------------
+# Global variables
+# -----------------------------------------------------------------------------
+# organize outcome of interactions
 Interaction = namedtuple("Interaction", ["kind", "outgoing", "tint"])
 Interaction.__doc__ = """Type of ray after surface interaction.
 
@@ -42,14 +50,14 @@ Interaction.__doc__ = """Type of ray after surface interaction.
     If kind == 'DIFFUSE' then outgoing and tint will not be used and are None.
     """
 
-# -----------------------------------------------------------------------------
-# Material handling for tracing
-# -----------------------------------------------------------------------------
 # cache material to shader mapping for faster access, materials_cache is a dict
 # of form {material: (surface shader function, volume parameters tuple)}
 materials_cache = dict()
 
 
+# -----------------------------------------------------------------------------
+# Material handling for tracing
+# -----------------------------------------------------------------------------
 # helper functions ------------------------------------------------------------
 def fresnel(ray_direction, normal, ior):
     """Fresnel mix factor."""
@@ -296,7 +304,6 @@ def setup_scalar_node(node, from_socket_identifier=None):
         # formulas from cycles/kernel/svm_fresnel.h
         if from_socket_identifier == 'Fresnel':
             ior = 1 / max(1 - blend, 1e-5)
-            print(f"IOR: {ior}")
 
             def fac(incoming, normal):
                 return fresnel(incoming, normal, ior)

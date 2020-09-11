@@ -20,34 +20,37 @@
 # ##### END GPL LICENSE BLOCK #####
 """Functions that are used for tracing rays and creating the caustic bmeshes.
 
-Several of the functions use scene, view_layer and depsgraph, so to shorten
-function arguments they are global variables. Set/unset them via
-- setup(scene, view_layer, depsgraph)
-- cleanup()
-
-Tracing of rays works via
+Tracing of rays is done via
 - trace_lightsheet
 - trace_scene_recursive
+- scene_raycast
 
 Helper functions:
 - calc_normal_and_uv
-- get_eval_mesh
-- new_caustic_bmesh (uses cache to speed up access)
+- get_eval_mesh (uses cache to speed up access)
+- new_caustic_bmesh
+
+Note that after tracing you should cleanup the generated meshes via
+for obj in trace.meshes_cache:
+    obj.to_mesh_clear()
+trace.meshes_cache.clear()
 """
 
 from collections import defaultdict, namedtuple
 from math import copysign, exp
 
 import bmesh
+import bpy
 from mathutils import Color, Vector
 from mathutils.geometry import (barycentric_transform, intersect_point_tri,
                                 tessellate_polygon)
 
 from lightsheet import material
 
-print("lightsheet trace.py")
-
-# use namedtuple to organize ray information
+# -----------------------------------------------------------------------------
+# Global variables
+# -----------------------------------------------------------------------------
+# organize ray information
 Ray = namedtuple("Ray", ["origin", "direction", "tint", "path"])
 Ray.__doc__ = """Record ray information for tracing.
 
@@ -57,6 +60,7 @@ Ray.__doc__ = """Record ray information for tracing.
     already taken raypath (a tuple of Link instances).
     """
 
+# organize links in interaction chains
 Link = namedtuple("Link", ["object", "kind", "volume_params"])
 Link.__doc__ = """One link in the chain of interactions of a ray.
 
@@ -65,67 +69,28 @@ Link.__doc__ = """One link in the chain of interactions of a ray.
     parameters as a tuple.
     """
 
-
-# -----------------------------------------------------------------------------
-# Handle global variables
-# -----------------------------------------------------------------------------
-# simplify function calls by using scene, view_layer and depsgraph as globals
-_SCENE = None
-_VIEW_LAYER = None
-_DEPSGRAPH = None
-
 # cache evaluated meshes for faster access, meshes_cache is a dict of form
 # {object: mesh datablock of evaluated object}
-meshes_cache = None
-
-
-def setup(scene, view_layer, depsgraph):
-    """Setup empty caches and set global variables for trace"""
-    global _SCENE, _VIEW_LAYER, _DEPSGRAPH, meshes_cache
-
-    # setup empty caches
-    meshes_cache = dict()
-    material.materials_cache = dict()
-
-    # setup globals
-    _SCENE = scene
-    _VIEW_LAYER = view_layer
-    _DEPSGRAPH = depsgraph
-
-
-def cleanup():
-    """Cleanup caches and reset global variables for trace"""
-    global meshes_cache, _SCENE, _VIEW_LAYER, _DEPSGRAPH
-
-    # cleanup generated meshes
-    for obj in meshes_cache:
-        obj.to_mesh_clear()
-
-    # cleanup caches
-    meshes_cache.clear()
-    material.materials_cache.clear()
-
-    # reset globals
-    _SCENE = None
-    _VIEW_LAYER = None
-    _DEPSGRAPH = None
+meshes_cache = dict()
 
 
 # -----------------------------------------------------------------------------
 # Trace functions
 # -----------------------------------------------------------------------------
-def trace_lightsheet(ls_mesh, matrix, max_bounces, projection_mode="point"):
+def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     """Trace rays from lighsheet and return all caustics coordinates in dict"""
+    # get lightsheet mesh
+    ls_bmesh = bmesh.new(use_operators=False)
+    ls_bmesh.from_object(lightsheet, depsgraph)
+
+    # get lightsheet coordinate system
+    lightsheet_eval = lightsheet.evaluated_get(depsgraph)
+    matrix = lightsheet_eval.matrix_world.copy()
     origin = matrix.to_translation()
 
-    # seutp first ray of given vertex coordinate depending on projection mode
-    assert projection_mode in {"point", "parallel"}
-    if projection_mode == "point":
-        # project from origin of lightsheet coordinate system
-        def first_ray_coords(vert_co):
-            direction = matrix @ vert_co - origin
-            return origin, direction.normalized()
-    else:
+    # setup first ray of given vertex coordinate depending on light type
+    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
+    if lightsheet.parent.data.type == 'SUN':
         # parallel projection along -z axis (local coordinates)
         # note that origin = matrix @ Vector((0, 0, 0))
         target = matrix @ Vector((0, 0, -1))
@@ -133,42 +98,43 @@ def trace_lightsheet(ls_mesh, matrix, max_bounces, projection_mode="point"):
 
         def first_ray_coords(vert_co):
             return matrix @ vert_co, minus_z_axis
+    else:
+        # project from origin of lightsheet coordinate system
+        def first_ray_coords(vert_co):
+            direction = matrix @ vert_co - origin
+            return origin, direction.normalized()
 
-    ls_id_data = ls_mesh.vertex_layers_int["id"].data
-    white = Color((1.0, 1.0, 1.0))
-
-    # path_bm = {path: (caustic bmesh, vertex uv dict, vertex color dict)}
+    ls_id = ls_bmesh.verts.layers.int["id"]
+    # path_bm = {path: (caustic bmesh, normal dict, color dict, uv dict)}
     path_bm = defaultdict(new_caustic_bmesh)
-    for ls_vert in ls_mesh.vertices:
+    for ls_vert in ls_bmesh.verts:
         # setup first ray
         ray_origin, ray_direction = first_ray_coords(ls_vert.co)
-        ray = Ray(ray_origin, ray_direction, white, tuple())
+        ray = Ray(ray_origin, ray_direction, Color((1.0, 1.0, 1.0)), tuple())
 
         # trace ray
-        vert_id = ls_id_data[ls_vert.index].value
-        assert vert_id != -1, "lightsheet vertex id uninitialized"
-        trace_scene_recursive(ray, vert_id, max_bounces, path_bm)
+        vert_id = ls_vert[ls_id]
+        trace_scene_recursive(ray, vert_id, depsgraph, max_bounces, path_bm)
 
     return path_bm
 
 
-def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
+def trace_scene_recursive(ray, vert_id, depsgraph, max_bounces, path_bm):
     """Recursively trace a ray, add interaction to path_bm dict"""
     ray_origin, ray_direction, color, old_path = ray
-    result = scene_raycast(ray_origin, ray_direction)
+    result = scene_raycast(ray_origin, ray_direction, depsgraph)
     obj, location, normal, uv, face_index = result
-    # print(ray_origin, ray_direction, obj, location)
 
     # if we hit the background we reached the end of the path
     if obj is None:
         return
 
     # not the end of the path, right???
-    assert location is not None
-    assert normal is not None
+    assert location is not None and normal is not None, (location, normal)
 
     # get hit face
-    face = get_eval_mesh(obj).polygons[face_index]
+    obj_mesh = get_eval_mesh(obj, depsgraph)
+    face = obj_mesh.polygons[face_index]
 
     # get material on hit face with given index
     if obj.material_slots:
@@ -188,8 +154,8 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
             # add vertex to caustic only for reflective and refractive caustics
             if any(step[1] in {'REFLECT', 'REFRACT'} for step in old_path):
                 # get the caustic bmesh for this chain of interactions
-                caustic_path = old_path + (Link(obj, kind, None),)
-                bm, uv_dict, color_dict = path_bm[tuple(caustic_path)]
+                caustic_key = tuple(old_path + (Link(obj, kind, None),))
+                bm, normal_dict, color_dict, uv_dict = path_bm[caustic_key]
 
                 # create caustic vertex in front of object
                 offset = copysign(1e-4, -ray_direction.dot(face.normal))
@@ -200,11 +166,13 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
                 id_layer = bm.verts.layers.int["id"]
                 vert[id_layer] = vert_id
 
-                # record uv coordinates from target object and record color as
-                # vertex color, will set them later when creating faces
+                # record normal from hit face, vertex color from path and
+                # uv-coordinate from target object, we will set them later when
+                # creating faces
+                normal_dict[vert_id] = face.normal
+                color_dict[vert_id] = color
                 if uv is not None:
                     uv_dict[vert_id] = uv
-                color_dict[vert_id] = color
         elif len(old_path) < max_bounces:
             assert new_direction is not None
             # move the starting point a safe distance away from the object
@@ -238,31 +206,42 @@ def trace_scene_recursive(ray, vert_id, max_bounces, path_bm):
 
             # trace new ray
             new_ray = Ray(new_origin, new_direction, new_color, new_path)
-            trace_scene_recursive(new_ray, vert_id, max_bounces, path_bm)
+            trace_scene_recursive(new_ray, vert_id, depsgraph, max_bounces,
+                                  path_bm)
 
 
-def scene_raycast(ray_origin, ray_direction):
+def scene_raycast(ray_origin, ray_direction, depsgraph):
     """Raycast all visible objects in the set scene and view layer"""
     # cast the ray
-    result = _SCENE.ray_cast(_VIEW_LAYER, ray_origin, ray_direction)
-    success, location, normal, face_index, obj, matrix = result
+    scene = depsgraph.scene
+    if bpy.app.version < (2, 91, 0):
+        hit, position, normal, face_index, obj, matrix = scene.ray_cast(
+            view_layer=depsgraph.view_layer,
+            origin=ray_origin,
+            direction=ray_direction)
+    else:
+        # API change: https://developer.blender.org/rBA82ed41ec6324
+        hit, position, normal, face_index, obj, matrix = scene.ray_cast(
+            depsgraph=depsgraph,
+            origin=ray_origin,
+            direction=ray_direction)
 
-    if not success:
+    if not hit:
         # no hit
         return None, None, None, None, None
 
     # calculate (smooth) normal
-    location_obj = matrix.inverted() @ location
-    normal_obj, uv = calc_normal_and_uv(obj, face_index, location_obj)
-    normal = (matrix @ (location_obj + normal_obj) - location).normalized()
+    pos_obj = matrix.inverted() @ position
+    normal_obj, uv = calc_normal_and_uv(obj, depsgraph, face_index, pos_obj)
+    normal = (matrix @ (pos_obj + normal_obj) - position).normalized()
 
-    return obj, location, normal, uv, face_index
+    return obj, position, normal, uv, face_index
 
 
-def calc_normal_and_uv(obj, face_index, point):
+def calc_normal_and_uv(obj, depsgraph, face_index, point):
     """Calculate (smooth) normal vector and uv coordinates for given point"""
     # get the face that we hit
-    mesh = get_eval_mesh(obj)
+    mesh = get_eval_mesh(obj, depsgraph)
     face = mesh.polygons[face_index]
 
     # do we have to smooth the normals? do we have uv coordinates?
@@ -323,15 +302,15 @@ def calc_normal_and_uv(obj, face_index, point):
     return (normal, uv)
 
 
-def get_eval_mesh(obj):
+def get_eval_mesh(obj, depsgraph):
     """Return mesh of object with modifiers, etc. applied"""
     # check cache
     mesh = meshes_cache.get(obj)
     if mesh is not None:
         return mesh
 
-    # get mesh of evaluated object
-    obj_eval = obj.evaluated_get(_DEPSGRAPH)
+    # get mesh of object
+    obj_eval = obj.evaluated_get(depsgraph)
     mesh = obj_eval.to_mesh()
     mesh.calc_normals_split()  # for loop normals
 
@@ -339,40 +318,34 @@ def get_eval_mesh(obj):
     return mesh
 
 
-def new_caustic_bmesh(obj=None):
-    """Create bmesh (empty or imported) with data layers used for caustics"""
+def new_caustic_bmesh():
+    """Create empty bmesh with data layers used for caustics"""
     bm = bmesh.new()
 
-    # if object is given, import mesh of evaluated object
-    if obj is not None:
-        bm.from_object(obj, _DEPSGRAPH)
+    # create id layer = vertex index from source mesh
+    bm.verts.layers.int.new("id")
 
-    # get or create id layer = vertex index from source mesh
-    id_layer = bm.verts.layers.int.get("id")
-    if id_layer is None:
-        id_layer = bm.verts.layers.int.new("id")
+    # create uv layer for caustic squeeze = ratio of source face area to
+    # projected face area
+    bm.loops.layers.uv.new("Caustic Squeeze")
 
-    # get or create uv layer for transplanted coordinates
-    uv_layer = bm.loops.layers.uv.get("Transplanted UVMap")
-    if uv_layer is None:
-        uv_layer = bm.loops.layers.uv.new("Transplanted UVMap")
+    # create vertex color layer for caustic tint
+    bm.loops.layers.color.new("Caustic Tint")
 
-    # get or create uv layer for caustic squeeze = ratio of source face area
-    # to projected face area
-    squeeze_layer = bm.loops.layers.uv.get("Caustic Squeeze")
-    if squeeze_layer is None:
-        squeeze_layer = bm.loops.layers.uv.new("Caustic Squeeze")
+    # create uv layer for transplanted coordinates
+    bm.loops.layers.uv.new("UVMap")
 
-    # get or create vertex color layer
-    color_layer = bm.loops.layers.color.get("Caustic Tint")
-    if color_layer is None:
-        color_layer = bm.loops.layers.color.new("Caustic Tint")
+    # after we have created faces we need to ensure that the face normal
+    # points in the right direction, in trace we will therefore record the
+    # normal at each vertex and later compare the face normal with the average
+    # vertex normal
+    normal_dict = dict()
 
-    # since we can apply uv coordinates and vertex colors only via loops and
-    # not to vertices directly, we will record the coordinates and colors in
+    # since we can apply vertex colors and uv coordinates only to loops and
+    # not to vertices directly, we will record the colors and coordinates in
     # these dicts and set them later when we iterate over the faces of the
     # bmesh
-    uv_dict = dict()
     color_dict = dict()
+    uv_dict = dict()
 
-    return bm, uv_dict, color_dict
+    return bm, normal_dict, color_dict, uv_dict

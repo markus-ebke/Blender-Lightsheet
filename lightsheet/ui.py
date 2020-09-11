@@ -21,11 +21,10 @@
 """User interface for lightsheet addon.
 
 LIGHTSHEET_PT_tools: Panel in sidebar to access the operators.
+LIGHTSHEET_PT_caustic: Summary of caustic information.
 """
 
 from bpy.types import Panel
-
-print("lightsheet ui.py")
 
 
 class LIGHTSHEET_PT_tools(Panel):
@@ -48,7 +47,7 @@ class LIGHTSHEET_PT_tools(Panel):
                 col.label(text="Object is light source", icon='LIGHT')
             elif obj.type == 'MESH':
                 if obj.parent is not None and obj.parent.type == 'LIGHT':
-                    txt = "Object is lightsheet"
+                    txt = "Object can be lightsheet"
                     col.label(text=txt, icon='LIGHTPROBE_PLANAR')
                 elif obj.caustic_info.path:
                     if obj.caustic_info.finalized:
@@ -83,19 +82,16 @@ class LIGHTSHEET_PT_caustic(Panel):
     def draw(self, context):
         layout = self.layout
         col = layout.column()
-
-        # get caustic info from active object
-        assert context.object is not None and context.object.caustic_info.path
         caustic_info = context.object.caustic_info
 
-        # print lightsheet
+        # lightsheet info
         lightsheet = caustic_info.lightsheet
         if lightsheet is not None:
             col.label(text=f"Source: {lightsheet.name}")
         else:
             col.label(text="Lightsheet not found", icon='ORPHAN_DATA')
 
-        # list contents of lightsheet_path
+        # list contents of caustic_info.path
         for link in caustic_info.path:
             interaction = link.kind.capitalize()
             if link.object:

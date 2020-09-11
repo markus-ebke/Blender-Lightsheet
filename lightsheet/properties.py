@@ -18,7 +18,14 @@
 #  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 # ##### END GPL LICENSE BLOCK #####
-"""Custom Properties to keep track of certain information."""
+"""Custom properties to keep track of caustic information.
+
+CausticInfo is a property for objects, if the path variable not empty then the
+object is a caustic. The entries of path are of type CausticPathLink and
+specify the object that was hit and the kind of interaction. The target object
+is the last one in this path and the only entry with a diffuse interaction.
+Caustics that are finalized should not be refined anymore.
+"""
 
 import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,

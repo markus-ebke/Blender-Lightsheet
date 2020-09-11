@@ -20,12 +20,22 @@
 # ##### END GPL LICENSE BLOCK #####
 """Operators that do stuff with lightsheets.
 
-LIGHTSHEET_OT_create_lightsheet: Create a lightsheet, uses the functions
-create_bmesh_square, create_bmesh_circle and create_bmesh_icosahedron to create
-lightsheets depending on light type.
+LIGHTSHEET_OT_create_lightsheet: Create a lightsheet, the kind of sheet depends
+on the light type. It uses the functions
+- create_bmesh_square
+- create_bmesh_disk
+- create_bmesh_sphere
+- convert_to_lightsheet
 
 LIGHTSHEET_OT_trace_lighsheet: Trace the selected lightsheet and create caustic
-objects, tracing is done with functions from trace.py
+objects. Uses
+- verify_lighsheet
+- convert_caustics_to_objects
+while tracing is done with functions from trace.py.
+
+LIGHTSHEET_OT_finalize_caustics: Smooth out and cleanup selected caustics with
+- smooth_caustic_squeeze
+- cleanup_caustic
 """
 
 from math import sqrt, tan
@@ -38,8 +48,6 @@ from mathutils import Vector
 from mathutils.geometry import barycentric_transform
 
 from lightsheet import material, trace
-
-print("lightsheet operators.py")
 
 
 # -----------------------------------------------------------------------------
@@ -63,12 +71,11 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
 
     def invoke(self, context, event):
         obj = context.object
-        assert obj is not None and obj.type == 'LIGHT', obj
 
         # cancel operator for area lights
         light_type = obj.data.type
         if light_type not in {'SUN', 'SPOT', 'POINT'}:
-            message = f"{light_type} lights are not supported"
+            message = f"{light_type.capitalize()} lights are not supported"
             self.report({'ERROR'}, message)
             return {'CANCELLED'}
 
@@ -80,12 +87,11 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         start = time()
 
         # build lightsheet around active object (should be a light source)
-        obj = context.object
-        assert obj is not None and obj.type == 'LIGHT', obj
+        light = context.object
 
         # setup lightsheet bmesh, type of lightsheet depends on type of light
-        light_type = obj.data.type
-        assert light_type in {'SUN', 'SPOT', 'POINT'}, obj.data.type
+        light_type = light.data.type
+        assert light_type in {'SUN', 'SPOT', 'POINT'}, light.data.type
         if light_type == 'SUN':
             # sun gets a square grid, because we don't know anything better
             sidelength = 2  # scale by hand if not the right size
@@ -95,48 +101,25 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
             # radius = tan(halfangle) (because size of circle = sin(...) and
             # shift = cos(...), but we want shift = 1, so divide by cos(...)
             # and radius becomes sin / cos = tan)
-            angle = obj.data.spot_size  # between 0° and 180°, but in radians
+            angle = light.data.spot_size  # between 0° and 180°, but in radians
             radius = min(tan(angle / 2), 10)  # restrict for angles near 180°
-            bm = create_bmesh_circle(radius, self.resolution)
+            bm = create_bmesh_disk(radius, self.resolution)
 
             # shift circle to inside of cone
             for vert in bm.verts:
                 vert.co.z = -1
         else:
-            # icosahedron because lightsheet should surround the point light
-            bm = create_bmesh_icosahedron(self.resolution)
+            # lightsheet that surrounds the point light
+            bm = create_bmesh_sphere(self.resolution)
 
-        # create id layer and assign values
-        bm_id = bm.verts.layers.int.new("id")
-        for idx, vert in enumerate(bm.verts):
-            vert[bm_id] = idx
-
-        # think of a good name
-        name = f"Lightsheet for {obj.name}"
-
-        # convert bmesh to mesh data block and create new object
-        me = bpy.data.meshes.new(name)
-        bm.to_mesh(me)
-        bm.free()
-        lightsheet = bpy.data.objects.new(name, me)
-
-        # adjust drawing and visibility
-        lightsheet.display_type = 'WIRE'
-        lightsheet.hide_render = True
-        lightsheet.cycles_visibility.camera = False
-        lightsheet.cycles_visibility.shadow = False
-        lightsheet.cycles_visibility.diffuse = False
-        lightsheet.cycles_visibility.transmission = False
-        lightsheet.cycles_visibility.scatter = False
-
-        # add to scene
+        # convert to lightsheet object and add to scene
+        lightsheet = convert_to_lightsheet(bm, light)
         coll = context.scene.collection
         coll.objects.link(lightsheet)
-        lightsheet.parent = obj
 
         # report statistics
-        v_stats = "{:,} vertices".format(len(me.vertices))
-        f_stats = "{:,} faces".format(len(me.polygons))
+        v_stats = "{:,} vertices".format(len(lightsheet.data.vertices))
+        f_stats = "{:,} faces".format(len(lightsheet.data.polygons))
         t_stats = "{:.3f}s".format((time() - start))
         self.report({"INFO"}, f"Created {v_stats} and {f_stats} in {t_stats}")
 
@@ -193,7 +176,7 @@ def create_bmesh_square(sidelength, resolution):
     return bm
 
 
-def create_bmesh_circle(radius, resolution):
+def create_bmesh_disk(radius, resolution):
     """Create bmesh for a circle filled with triangles."""
     # the easiest way to create a circle is to create a square and then cut out
     # the circle
@@ -209,11 +192,11 @@ def create_bmesh_circle(radius, resolution):
     return bm
 
 
-def create_bmesh_icosahedron(resolution, radius=1):
-    """Create an icosahedral bmesh with faces filled by triangles."""
+def create_bmesh_sphere(resolution, radius=1):
+    """Create a spherical bmesh based on a subdivided icosahedron."""
     # template icosahedron
     bm_template = bmesh.new()
-    bmesh.ops.create_icosphere(bm_template, subdivisions=0, diameter=radius)
+    bmesh.ops.create_icosphere(bm_template, subdivisions=0, diameter=1.0)
 
     # size of source triangle and smaller filler triangles
     source_triangle = [
@@ -236,6 +219,7 @@ def create_bmesh_icosahedron(resolution, radius=1):
                 coords = barycentric_transform(Vector((i, j, 0)),
                                                *source_triangle,
                                                *target_triangle)
+                coords *= radius / coords.length  # place on sphere
                 vert = bm.verts.new(coords)
                 strip.append(vert)
             strips.append(strip)
@@ -260,6 +244,37 @@ def create_bmesh_icosahedron(resolution, radius=1):
     return bm
 
 
+def convert_to_lightsheet(bm, light):
+    """Convert given bmesh to lightsheet object with given light as parent."""
+    # create id layer and assign values
+    id_layer = bm.verts.layers.int.new("id")
+    for idx, vert in enumerate(bm.verts):
+        vert[id_layer] = idx
+
+    # think of a good name
+    name = f"Lightsheet for {light.name}"
+
+    # convert bmesh to mesh data block
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+
+    # create new object
+    lightsheet = bpy.data.objects.new(name, me)
+    lightsheet.parent = light
+
+    # adjust drawing and visibility
+    lightsheet.display_type = 'WIRE'
+    lightsheet.hide_render = True
+    lightsheet.cycles_visibility.camera = False
+    lightsheet.cycles_visibility.shadow = False
+    lightsheet.cycles_visibility.diffuse = False
+    lightsheet.cycles_visibility.transmission = False
+    lightsheet.cycles_visibility.scatter = False
+
+    return lightsheet
+
+
 # -----------------------------------------------------------------------------
 # Trace lightsheet
 # -----------------------------------------------------------------------------
@@ -278,16 +293,13 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
     def poll(cls, context):
         # operator makes sense only for lightsheets (must have light as parent)
         obj = context.object
-        if obj is not None:
+        if obj is not None and obj.type == 'MESH':
             parent = obj.parent
             return parent is not None and parent.type == 'LIGHT'
 
         return False
 
     def invoke(self, context, event):
-        obj = context.object
-        assert obj is not None and obj.parent.type == 'LIGHT', obj
-
         # set properties via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
@@ -295,50 +307,34 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
     def execute(self, context):
         start = time()
 
-        # context variables
-        scene = context.scene
-        view_layer = context.view_layer
-        depsgraph = context.evaluated_depsgraph_get()
-
-        # set globals for trace
-        trace.setup(scene, view_layer, depsgraph)
-
-        # lightsheet (source of rays) = active object
-        lightsheet = context.object
-        ls_mesh = lightsheet.to_mesh()
-        lightsheet_eval = lightsheet.evaluated_get(depsgraph)
-        matrix = lightsheet_eval.matrix_world.copy()
-
-        # verify that lightsheet has id layer = persistent vertex index, if not
-        # then create one and assign values
-        ls_id = ls_mesh.vertex_layers_int.get("id")
-        if ls_id is None:
-            ls_id = ls_mesh.vertex_layers_int.new(name="id")
-            for vert in ls_mesh.vertices:
-                ls_id.data[vert.index].value = vert.index
-
-        # check id data before we continue
-        assert all(ls_id.data[v.index].value != -1 for v in ls_mesh.vertices)
+        # parameters for tracing
+        lightsheet = verify_lightsheet(context.object)
+        depsgraph = context.view_layer.depsgraph
+        max_bounces = self.max_bounces
 
         # hide lightsheets and caustics from raycast
         hidden = []
-        for obj in view_layer.objects:
-            if "Lightsheet" in obj.name or "Caustic" in obj.name:
+        for obj in depsgraph.view_layer.objects:
+            if "lightsheet" in obj.name.lower() or obj.caustic_info.path:
                 hidden.append((obj, obj.hide_viewport))
                 obj.hide_viewport = True
 
         # raytrace lightsheet and convert resulting caustics to objects
-        light_type = lightsheet.parent.data.type
-        mode = "parallel" if light_type == 'SUN' else "point"
-        path_bm = trace.trace_lightsheet(
-            ls_mesh, matrix, self.max_bounces, mode)
-        caustics = convert_to_objects(lightsheet, path_bm)
+        path_bm = trace.trace_lightsheet(lightsheet, depsgraph, max_bounces)
+        caustics = convert_caustics_to_objects(lightsheet, path_bm)
+
+        # cleanup generated meshes and caches
+        lightsheet.to_mesh_clear()
+        for obj in trace.meshes_cache:
+            obj.to_mesh_clear()
+        trace.meshes_cache.clear()
+        material.materials_cache.clear()
 
         # get or setup collection for caustics
         coll = bpy.data.collections.get("Caustics")
         if coll is None:
             coll = bpy.data.collections.new("Caustics")
-            scene.collection.children.link(coll)
+            context.scene.collection.children.link(coll)
 
         # add caustic objects to caustic collection
         for obj in caustics:
@@ -348,10 +344,6 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         for obj, state in hidden:
             obj.hide_viewport = state
 
-        # cleanup generated meshes and reset trace globals
-        lightsheet.to_mesh_clear()
-        trace.cleanup()
-
         # report statistics
         c_stats = "{} caustics".format(len(caustics))
         t_stats = "{:.1f}s".format((time() - start))
@@ -360,7 +352,29 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         return {"FINISHED"}
 
 
-def convert_to_objects(lightsheet, path_bm):
+def verify_lightsheet(obj):
+    """Confirm that the given object can be used as a lightsheet."""
+    assert obj is not None and isinstance(obj, bpy.types.Object)
+
+    # verify name
+    if "lightsheet" not in obj.name.lower():
+        obj.name = f"Lightsheet {obj.name}"
+
+    # verify that lightsheet mesh has id layer = persistent vertex index
+    mesh = obj.to_mesh()
+    ls_id = mesh.vertex_layers_int.get("id")
+    if ls_id is None:
+        ls_id = mesh.vertex_layers_int.new(name="id")
+        for vert in mesh.vertices:
+            ls_id.data[vert.index].value = vert.index
+
+    # check id data before we continue
+    assert all(ls_id.data[v.index].value != -1 for v in mesh.vertices)
+
+    return obj
+
+
+def convert_caustics_to_objects(lightsheet, path_bm):
     """Convert caustic bmeshes to blender objects with filled in faces."""
     ls_mesh = lightsheet.to_mesh()
     ls_id = ls_mesh.vertex_layers_int["id"]
@@ -370,7 +384,7 @@ def convert_to_objects(lightsheet, path_bm):
 
     # create faces and turn bmeshes into objects
     caustic_objects = []
-    for path, (bm, uv_dict, color_dict) in path_bm.items():
+    for path, (bm, normal_dict, color_dict, uv_dict) in path_bm.items():
         # parent of caustic = last object
         last_link = path[-1]
         parent_obj = last_link.object
@@ -405,14 +419,25 @@ def convert_to_objects(lightsheet, path_bm):
                     loop[squeeze_layer].uv = (0, squeeze)
 
         # set transplanted uv-coordinates and vertex colors
-        uv_layer = bm.loops.layers.uv["Transplanted UVMap"]
+        uv_layer = bm.loops.layers.uv["UVMap"]
         color_layer = bm.loops.layers.color["Caustic Tint"]
         for face in bm.faces:
+            vert_normal_sum = Vector((0, 0, 0))
             for loop in face.loops:
                 vert_id = loop.vert[id_layer]
+
+                vert_normal_sum += normal_dict[vert_id]
                 if uv_dict:  # only set uv-coords if we have uv-coords
                     loop[uv_layer].uv = uv_dict[vert_id]
                 loop[color_layer] = tuple(color_dict[vert_id]) + (1,)
+
+            # if face normal does not point in the same general direction as
+            # the averaged vertex normal, then flip the face normal
+            face.normal_update()
+            if face.normal.dot(vert_normal_sum) < 0:
+                face.normal_flip()
+
+        bm.normal_update()
 
         # if we didn't copy any uv-coordinates from the parent object, then we
         # don't need the transplanted uvmap layer
@@ -432,7 +457,7 @@ def convert_to_objects(lightsheet, path_bm):
         if uv_dict:
             parent_uv_layer = parent_obj.data.uv_layers.active
             assert parent_obj.data.uv_layers.active is not None
-            uv_layer = me.uv_layers["Transplanted UVMap"]
+            uv_layer = me.uv_layers["UVMap"]
             uv_layer.name = parent_uv_layer.name
 
         # before setting parent, undo parent transform
@@ -462,7 +487,7 @@ def convert_to_objects(lightsheet, path_bm):
 # -----------------------------------------------------------------------------
 # Finalize caustics
 # -----------------------------------------------------------------------------
-class LIGHTSHEET_OT_finalize(Operator):
+class LIGHTSHEET_OT_finalize_caustics(Operator):
     """Smooth and cleanup selected caustics"""
     bl_idname = "lightsheet.finalize"
     bl_label = "Finalize Caustic"
@@ -598,26 +623,26 @@ def cleanup_caustic(bm, intensity_threshold):
     # remove faces with intensity less than intensity_threshold
     invisible_faces = []
     for face in bm.faces:
-        invisible = True
+        visible = False
         for loop in face.loops:
             squeeze = loop[squeeze_layer].uv[1]
             tint_v = max(loop[color_layer][:3])  # = Color(...).v
             if squeeze * tint_v > intensity_threshold:
                 # vertex is intense enough, face is visible
-                invisible = False
+                visible = True
                 break
 
-        if invisible:
+        if not visible:
             invisible_faces.append(face)
 
     bmesh.ops.delete(bm, geom=invisible_faces, context='FACES_ONLY')
 
     # clean up mesh, remove vertices and edges not connected to faces
-    lonely_verts = [ve for ve in bm.verts if len(ve.link_faces) == 0]
+    lonely_verts = [vert for vert in bm.verts if vert.is_wire]
     bmesh.ops.delete(bm, geom=lonely_verts, context='VERTS')
-    lonely_edges = [ed for ed in bm.edges if len(ed.link_faces) == 0]
+    lonely_edges = [edge for edge in bm.edges if edge.is_wire]
     bmesh.ops.delete(bm, geom=lonely_edges, context='EDGES')
 
     # check if cleanup was successful
-    assert not [ve for ve in bm.verts if len(ve.link_faces) == 0]
-    assert not [ed for ed in bm.edges if len(ed.link_faces) == 0]
+    assert not any(vert.is_wire for vert in bm.verts)
+    assert not any(edge.is_wire for edge in bm.edges)
