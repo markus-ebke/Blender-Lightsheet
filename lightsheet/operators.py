@@ -146,7 +146,8 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 
     def execute(self, context):
         # parameters for tracing
-        lightsheet = utils.verify_lightsheet(context.object)
+        lightsheet = context.object
+        utils.verify_lightsheet(lightsheet)
         depsgraph = context.view_layer.depsgraph
         max_bounces = self.max_bounces
 
@@ -160,12 +161,11 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         # raytrace lightsheet and convert resulting caustics to objects
         tic = perf_counter()
         path_bm = trace.trace_lightsheet(lightsheet, depsgraph, max_bounces)
-        cau_to_obj = partial(utils.convert_caustics_to_objects, lightsheet)
+        cau_to_obj = partial(utils.convert_caustic_to_objects, lightsheet)
         caustics = [cau_to_obj(pth, trc) for pth, trc in path_bm.items()]
         toc = perf_counter()
 
         # cleanup generated meshes and caches
-        lightsheet.to_mesh_clear()
         for obj in trace.meshes_cache:
             obj.to_mesh_clear()
         trace.meshes_cache.clear()
@@ -230,8 +230,8 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
+        tic = perf_counter()
         finalized, skipped, deleted = 0, 0, 0
-        timing = 0.0
         for obj in context.selected_objects:
             # skip objects that are not caustics or are already finalized
             if not obj.caustic_info.path or obj.caustic_info.finalized:
@@ -243,9 +243,9 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
             bm.from_mesh(obj.data)
 
             # smooth out and cleanup
-            tic = perf_counter()
             utils.smooth_caustic_squeeze(bm)
             utils.cleanup_caustic(bm, self.intensity_threshold)
+            # TODO for cycles overlapping faces should be stacked in layers
 
             # if no faces remain, delete the caustic (if wanted by the user)
             if len(bm.faces) == 0 and self.delete_empty_caustics:
@@ -253,9 +253,6 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
                 bpy.data.objects.remove(obj)
                 deleted += 1
                 continue
-
-            # TODO for cycles overlapping faces should be stacked in layers
-            toc = perf_counter()
 
             # convert bmesh back to object
             bm.to_mesh(obj.data)
@@ -265,13 +262,13 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
             obj.caustic_info.finalized = True
             finalized += 1
 
-            timing += toc - tic
+        toc = perf_counter()
 
         # report statistics
         f_stats = f"Finalized {finalized}"
         s_stats = f"skipped {skipped}"
         d_stats = f"deleted {deleted}"
-        t_stats = "{:.3f}s".format(timing)
+        t_stats = "{:.3f}s".format(toc-tic)
         if self.delete_empty_caustics:
             message = f"{f_stats}, {s_stats}, {d_stats} in {t_stats}"
             self.report({"INFO"}, message)

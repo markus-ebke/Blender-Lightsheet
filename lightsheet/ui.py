@@ -63,7 +63,7 @@ class LIGHTSHEET_PT_tools(Panel):
         # here come the important operators
         col.operator("lightsheet.create", icon='LIGHTPROBE_PLANAR')
         col.operator("lightsheet.trace", icon='HIDE_OFF')
-        col.operator("lightsheet.finalize", icon='SHADERFX')
+        col.operator("lightsheet.finalize", icon='OUTPUT')
 
 
 class LIGHTSHEET_PT_caustic(Panel):

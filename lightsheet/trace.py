@@ -81,7 +81,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     """Trace rays from lighsheet and return all caustics coordinates in dict"""
     # get lightsheet mesh
     ls_bmesh = bmesh.new(use_operators=False)
-    ls_bmesh.from_object(lightsheet, depsgraph)
+    ls_bmesh.from_mesh(lightsheet.data)
 
     # get lightsheet coordinate system
     lightsheet_eval = lightsheet.evaluated_get(depsgraph)
@@ -96,30 +96,37 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
         target = matrix @ Vector((0, 0, -1))
         minus_z_axis = (target - origin).normalized()
 
-        def first_ray_coords(vert_co):
-            return matrix @ vert_co, minus_z_axis
+        def first_ray_coords(sheet_pos):
+            return matrix @ Vector(sheet_pos), minus_z_axis
     else:
         # project from origin of lightsheet coordinate system
-        def first_ray_coords(vert_co):
-            direction = matrix @ vert_co - origin
+        def first_ray_coords(sheet_pos):
+            direction = matrix @ Vector(sheet_pos) - origin
             return origin, direction.normalized()
 
-    ls_id = ls_bmesh.verts.layers.int["id"]
+    # sheet coordinate access
+    sheet_x = ls_bmesh.verts.layers.float["Lightsheet X"]
+    sheet_y = ls_bmesh.verts.layers.float["Lightsheet Y"]
+    sheet_z = ls_bmesh.verts.layers.float["Lightsheet Z"]
+
     # path_bm = {path: (caustic bmesh, normal dict, color dict, uv dict)}
     path_bm = defaultdict(new_caustic_bmesh)
     for ls_vert in ls_bmesh.verts:
+        # get sheet position of this vertex
+        sheet_pos = (ls_vert[sheet_x], ls_vert[sheet_y], ls_vert[sheet_z])
+
         # setup first ray
-        ray_origin, ray_direction = first_ray_coords(ls_vert.co)
+        ray_origin, ray_direction = first_ray_coords(sheet_pos)
         ray = Ray(ray_origin, ray_direction, Color((1.0, 1.0, 1.0)), tuple())
 
         # trace ray
-        vert_id = ls_vert[ls_id]
-        trace_scene_recursive(ray, vert_id, depsgraph, max_bounces, path_bm)
+        trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, path_bm)
 
+    ls_bmesh.free()
     return path_bm
 
 
-def trace_scene_recursive(ray, vert_id, depsgraph, max_bounces, path_bm):
+def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, path_bm):
     """Recursively trace a ray, add interaction to path_bm dict"""
     ray_origin, ray_direction, color, old_path = ray
     result = scene_raycast(ray_origin, ray_direction, depsgraph)
@@ -162,17 +169,19 @@ def trace_scene_recursive(ray, vert_id, depsgraph, max_bounces, path_bm):
                 position = location + offset * face.normal
                 vert = bm.verts.new(position)
 
-                # set vertex id so that we can find its source vertex later
-                id_layer = bm.verts.layers.int["id"]
-                vert[id_layer] = vert_id
+                # set sheet coordinates
+                sx, sy, sz = sheet_pos
+                vert[bm.verts.layers.float["Lightsheet X"]] = sx
+                vert[bm.verts.layers.float["Lightsheet Y"]] = sy
+                vert[bm.verts.layers.float["Lightsheet Z"]] = sz
 
                 # record normal from hit face, vertex color from path and
                 # uv-coordinate from target object, we will set them later when
                 # creating faces
-                normal_dict[vert_id] = face.normal
-                color_dict[vert_id] = color
+                normal_dict[sheet_pos] = face.normal
+                color_dict[sheet_pos] = color
                 if uv is not None:
-                    uv_dict[vert_id] = uv
+                    uv_dict[sheet_pos] = uv
         elif len(old_path) < max_bounces:
             assert new_direction is not None
             # move the starting point a safe distance away from the object
@@ -206,7 +215,7 @@ def trace_scene_recursive(ray, vert_id, depsgraph, max_bounces, path_bm):
 
             # trace new ray
             new_ray = Ray(new_origin, new_direction, new_color, new_path)
-            trace_scene_recursive(new_ray, vert_id, depsgraph, max_bounces,
+            trace_scene_recursive(new_ray, sheet_pos, depsgraph, max_bounces,
                                   path_bm)
 
 
@@ -322,8 +331,14 @@ def new_caustic_bmesh():
     """Create empty bmesh with data layers used for caustics"""
     bm = bmesh.new()
 
-    # create id layer = vertex index from source mesh
-    bm.verts.layers.int.new("id")
+    # create vertex layers for sheet coordinates
+    bm.verts.layers.float.new("Lightsheet X")
+    bm.verts.layers.float.new("Lightsheet Y")
+    bm.verts.layers.float.new("Lightsheet Z")
+
+    # create uv-layers for sheet coordinates
+    bm.loops.layers.uv.new("Lightsheet XY")
+    bm.loops.layers.uv.new("Lightsheet XZ")
 
     # create uv layer for caustic squeeze = ratio of source face area to
     # projected face area
