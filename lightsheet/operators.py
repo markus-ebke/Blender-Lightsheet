@@ -24,6 +24,7 @@ LIGHTSHEET_OT_create_lightsheet: Create a lightsheet, the kind of sheet depends
 on the light type.
 LIGHTSHEET_OT_trace_lighsheet: Trace the selected lightsheet and create caustic
 objects.
+LIGHTSHEET_OT_refine_caustics: Adaptively subdivide selected caustics.
 LIGHTSHEET_OT_finalize_caustics: Smooth out and cleanup selected caustics.
 """
 
@@ -42,7 +43,7 @@ from lightsheet import material, trace, utils
 # Create lightsheet
 # -----------------------------------------------------------------------------
 class LIGHTSHEET_OT_create_lightsheet(Operator):
-    """Create a lightsheet"""
+    """Create a lightsheet for the active object (must be a light)"""
     bl_idname = "lightsheet.create"
     bl_label = "Create Lightsheet"
     bl_options = {'REGISTER', 'UNDO'}
@@ -158,6 +159,10 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
                 hidden.append((obj, obj.hide_viewport))
                 obj.hide_viewport = True
 
+        # make sure caches are clean
+        trace.meshes_cache.clear()
+        material.materials_cache.clear()
+
         # raytrace lightsheet and convert resulting caustics to objects
         tic = perf_counter()
         path_bm = trace.trace_lightsheet(lightsheet, depsgraph, max_bounces)
@@ -172,9 +177,11 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         material.materials_cache.clear()
 
         # get or setup collection for caustics
-        coll = bpy.data.collections.get("Caustics")
+        coll = context.scene.collection.children.get("Caustics")
         if coll is None:
-            coll = bpy.data.collections.new("Caustics")
+            coll = bpy.data.collections.get("Caustics")
+            if coll is None:
+                coll = bpy.data.collections.new("Caustics")
             context.scene.collection.children.link(coll)
 
         # get material and add caustic object to caustic collection
@@ -192,6 +199,93 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         c_stats = "{} caustics".format(len(caustics))
         t_stats = "{:.1f}s".format((toc - tic))
         self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
+
+        return {"FINISHED"}
+
+
+# -----------------------------------------------------------------------------
+# Refine caustics
+# -----------------------------------------------------------------------------
+class LIGHTSHEET_OT_refine_caustic(Operator):
+    """Refine selected caustic by adaptively subdividing edges"""
+    bl_idname = "lightsheet.refine"
+    bl_label = "Refine Caustic"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    # rel. error = (distance of midpoint to projected midpoint) / (edge length)
+    relative_error: bpy.props.FloatProperty(
+        name="Relative Error",
+        description="Relative error for adaptive subdivision",
+        default=0.1, min=0.0, precision=3
+    )
+
+    @classmethod
+    def poll(cls, context):
+        # operator makes sense only for caustics
+        obj = context.object
+        if obj is not None:
+            return obj.caustic_info.path and not obj.caustic_info.finalized
+        return False
+
+    def invoke(self, context, event):
+        # set properties via dialog window
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self)
+
+    def execute(self, context):
+        # parameters for tracing
+        caustic = context.object
+        assert caustic.caustic_info.path and not caustic.caustic_info.finalized
+        depsgraph = context.view_layer.depsgraph
+
+        # check that we have a lightsheet
+        lightsheet = caustic.caustic_info.lightsheet
+        if lightsheet is None:
+            reasons = "it has no lightsheet"
+            msg = f"Cannot refine {caustic.name} because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
+
+        # check that light (parent of lightsheet) is valid
+        light = lightsheet.parent
+        if light is None or light.type != 'LIGHT':
+            reasons = "lightsheet parent is not a light"
+            msg = f"Cannot refine {caustic.name} because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
+
+        # check that light type is supported
+        light_type = light.data.type
+        if light_type not in {'SUN', 'SPOT', 'POINT'}:
+            reasons = f"{light_type.capitalize()} lights are not supported"
+            msg = f"Cannot refine {caustic.name} because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
+
+        # gather stats
+        num_verts_old = len(caustic.data.vertices)
+
+        # make sure caches are clean
+        trace.meshes_cache.clear()
+        material.materials_cache.clear()
+
+        # refine
+        tic = perf_counter()
+        trace.refine_caustic(caustic, depsgraph, self.relative_error)
+        toc = perf_counter()
+
+        # cleanup generated meshes and caches
+        for obj in trace.meshes_cache:
+            obj.to_mesh_clear()
+        trace.meshes_cache.clear()
+        material.materials_cache.clear()
+
+        # report statistics
+        incr_verts = len(caustic.data.polygons) - num_verts_old
+        incr_frac = incr_verts / num_verts_old if num_verts_old != 0 else 0
+        f_stats = f"Added {incr_verts:,} (+{incr_frac:.1%}) verts"
+        t_stats = "{:.3f}s".format(toc-tic)
+        self.report({"INFO"}, f"{f_stats} in {t_stats}")
 
         return {"FINISHED"}
 

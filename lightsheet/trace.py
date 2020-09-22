@@ -42,8 +42,8 @@ from math import copysign, exp
 import bmesh
 import bpy
 from mathutils import Color, Vector
-from mathutils.geometry import (barycentric_transform, intersect_point_tri,
-                                tessellate_polygon)
+from mathutils.geometry import (area_tri, barycentric_transform,
+                                intersect_point_tri, tessellate_polygon)
 
 from lightsheet import material
 
@@ -129,8 +129,8 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
 def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, path_bm):
     """Recursively trace a ray, add interaction to path_bm dict"""
     ray_origin, ray_direction, color, old_path = ray
-    result = scene_raycast(ray_origin, ray_direction, depsgraph)
-    obj, location, normal, uv, face_index = result
+    obj, location, normal, uv, face_index = scene_raycast(
+        ray_origin, ray_direction, depsgraph)
 
     # if we hit the background we reached the end of the path
     if obj is None:
@@ -224,27 +224,405 @@ def scene_raycast(ray_origin, ray_direction, depsgraph):
     # cast the ray
     scene = depsgraph.scene
     if bpy.app.version < (2, 91, 0):
-        hit, position, normal, face_index, obj, matrix = scene.ray_cast(
+        success, location, normal, face_index, obj, matrix = scene.ray_cast(
             view_layer=depsgraph.view_layer,
             origin=ray_origin,
             direction=ray_direction)
     else:
         # API change: https://developer.blender.org/rBA82ed41ec6324
-        hit, position, normal, face_index, obj, matrix = scene.ray_cast(
+        success, location, normal, face_index, obj, matrix = scene.ray_cast(
             depsgraph=depsgraph,
             origin=ray_origin,
             direction=ray_direction)
 
-    if not hit:
+    if not success:
         # no hit
         return None, None, None, None, None
 
     # calculate (smooth) normal
-    pos_obj = matrix.inverted() @ position
+    pos_obj = matrix.inverted() @ location
     normal_obj, uv = calc_normal_and_uv(obj, depsgraph, face_index, pos_obj)
-    normal = (matrix @ (pos_obj + normal_obj) - position).normalized()
+    normal = (matrix @ (pos_obj + normal_obj) - location).normalized()
 
-    return obj, position, normal, uv, face_index
+    return obj, location, normal, uv, face_index
+
+
+def refine_caustic(caustic_obj, depsgraph, relative_error):
+    """Do one adaptive subdivision of caustic bmesh."""
+    # convert caustic to bmesh
+    caustic_bm = bmesh.new()
+    caustic_bm.from_mesh(caustic_obj.data)
+
+    # world to caustic object coordinate transformation
+    obj_to_world = caustic_obj.parent.matrix_world
+    world_to_obj = obj_to_world.inverted()
+
+    # caustic info
+    caustic_info = caustic_obj.caustic_info
+    lightsheet = caustic_info.lightsheet
+    assert lightsheet is not None
+    path = [Link(link.object, link.kind, None) for link in caustic_info.path]
+
+    # get lightsheet coordinate system
+    lightsheet_eval = lightsheet.evaluated_get(depsgraph)
+    matrix = lightsheet_eval.matrix_world.copy()
+    origin = matrix.to_translation()
+
+    # setup first ray of given vertex coordinate depending on light type
+    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
+    if lightsheet.parent.data.type == 'SUN':
+        # parallel projection along -z axis (local coordinates)
+        # note that origin = matrix @ Vector((0, 0, 0))
+        target = matrix @ Vector((0, 0, -1))
+        minus_z_axis = (target - origin).normalized()
+
+        def first_ray_coords(sheet_pos):
+            return matrix @ Vector(sheet_pos), minus_z_axis
+    else:
+        # project from origin of lightsheet coordinate system
+        def first_ray_coords(sheet_pos):
+            direction = matrix @ Vector(sheet_pos) - origin
+            return origin, direction.normalized()
+
+    # coordinates of source position on lighsheet
+    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
+    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
+    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
+
+    # create vert -> sheet lookup table for faster access
+    vert_to_sheet = dict()
+    for vert in caustic_bm.verts:
+        sx = vert[sheet_x]
+        sy = vert[sheet_y]
+        sz = vert[sheet_z]
+        vert_to_sheet[vert] = (sx, sy, sz)
+
+    def bla(edge):
+        # get sheet positions of edge endpoints
+        vert1, vert2 = edge.verts
+        sheet_pos1 = Vector(vert_to_sheet[vert1])
+        sheet_pos2 = Vector(vert_to_sheet[vert2])
+
+        # calculate coordinates of edge midpoint and setup ray
+        sheet_mid = (sheet_pos1 + sheet_pos2) / 2
+        ray_origin, ray_direction = first_ray_coords(sheet_mid)
+
+        # trace ray
+        position, normal, color, uv = trace_along_path(
+            ray_origin, ray_direction, depsgraph, path)
+
+        return tuple(sheet_mid), position, normal, color, uv
+
+    # gather all edges that we have to split
+    refine_edges = set()  # edges to subdivide
+    # {edge to subdivide: sheet and target coords of midpoint}
+    refine_targets = dict()
+    for edge in caustic_bm.edges:
+        # add every edge of a boundary face
+        if edge.is_boundary:
+            assert len(edge.link_faces) == 1
+            face = edge.link_faces[0]
+            for other_edges in face.edges:
+                refine_edges.add(other_edges)
+            continue
+
+        # always refine wires
+        if edge.is_wire:
+            refine_edges.add(edge)
+
+        # skip edges that were not marked from last time
+        if not edge.seam:
+            continue
+
+        # calc midpoint and target coordinates
+        sheet_mid, target_pos, normal, color, uv = bla(edge)
+        refine_targets[edge] = (sheet_mid, target_pos, normal, color, uv)
+
+        # calc error and wether we should keep the edge
+        if target_pos is None:
+            refine_edges.add(edge)
+        else:
+            vert1, vert2 = edge.verts
+            edge_mid = obj_to_world @ (vert1.co + vert2.co) / 2
+            edge_length = (obj_to_world @ (vert1.co - vert2.co)).length
+            rel_err = (edge_mid - target_pos).length / edge_length
+            if rel_err > relative_error:
+                refine_edges.add(edge)
+
+    # if two edges of a triangle will be refined, also subdivide the other
+    # edge, this will make sure that we always end up with triangles
+    last_added = list(refine_edges)
+    newly_added = list()
+    while last_added:  # crawl through the mesh and select edges that we need
+        for edge in last_added:  # only last edges can change futher selection
+            for face in edge.link_faces:
+                assert len(face.edges) == 3  # must be a triangle
+                not_refined = [
+                    ed for ed in face.edges if ed not in refine_edges]
+                if len(not_refined) == 1:
+                    ed = not_refined[0]
+                    refine_edges.add(ed)
+                    newly_added.append(ed)
+
+        last_added = newly_added
+        newly_added = list()
+
+    # calculate targets for the missing edges
+    for edge in refine_edges:
+        if edge not in refine_targets:
+            refine_targets[edge] = bla(edge)
+
+    # split edges
+    edgelist = list(refine_edges)
+    splits = bmesh.ops.subdivide_edges(caustic_bm, edges=edgelist, cuts=1,
+                                       use_grid_fill=True,
+                                       use_single_edge=True)
+
+    # ensure triangles
+    triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
+    if triang_less:
+        print(f"We have to triangulate {len(triang_less)} faces")
+        bmesh.ops.triangulate(caustic_bm, faces=triang_less)
+
+    # gather the newly added vertices
+    dirty_verts = set()
+    for item in splits['geom_inner']:
+        if isinstance(item, bmesh.types.BMVert):
+            dirty_verts.add(item)
+
+    # gather the edges that we may have to split next
+    dirty_edges = set()
+    for item in splits['geom']:
+        if isinstance(item, bmesh.types.BMEdge):
+            dirty_edges.add(item)
+
+    # set coordinates
+    delete_verts = []
+    normal_dict, color_dict, uv_dict = dict(), dict(), dict()
+    for edge in refine_edges:
+        # find the newly added vertex, it is one of the endpoints of a
+        # refined edge
+        v1, v2 = edge.verts
+        if v1 in dirty_verts:
+            vert = v1
+        else:
+            assert v2 in dirty_verts, (v1.co, v2.co)
+            vert = v2
+
+        # set coordinates
+        sheet_mid, target_pos, normal, color, uv = refine_targets[edge]
+        if target_pos is None:
+            delete_verts.append(vert)
+        else:
+            vert.co = world_to_obj @ target_pos
+
+            # set sheet coords
+            sx, sy, sz = sheet_mid
+            vert[sheet_x] = sx
+            vert[sheet_y] = sy
+            vert[sheet_z] = sz
+
+            # save orther settings in mappings and set them later via loops
+            normal_dict[sheet_mid] = normal
+            color_dict[sheet_mid] = color
+            if uv is not None:
+                uv_dict[sheet_mid] = uv
+
+    # remove verts that have no target
+    dirty_verts.difference_update(delete_verts)
+    bmesh.ops.delete(caustic_bm, geom=delete_verts, context='VERTS')
+
+    # mark edges for next refinement step
+    for edge in caustic_bm.edges:
+        edge.seam = edge in dirty_edges
+
+    # select only the dirty verts
+    for face in caustic_bm.faces:
+        face.select_set(False)
+    for vert in dirty_verts:
+        vert.select_set(True)
+
+    # gather the faces where we have to recalulate squeeze
+    dirty_faces = set()
+    for vert in dirty_verts:
+        for face in vert.link_faces:
+            dirty_faces.add(face)
+
+    # squeeze layer
+    squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
+
+    # sheet coordinates uv-layers
+    uv_sheet_xy = caustic_bm.loops.layers.uv["Lightsheet XY"]
+    uv_sheet_xz = caustic_bm.loops.layers.uv["Lightsheet XZ"]
+
+    # uv-layers and vertex color access
+    if uv_dict:
+        uv_layer = caustic_bm.loops.layers.uv["UVMap"]
+    color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
+
+    # set face info
+    for face in dirty_faces:
+        assert len(face.verts) == 3, len(face.verts)
+        sheet_triangle = []
+        target_triangle = []
+        for vert in face.verts:
+            sx = vert[sheet_x]
+            sy = vert[sheet_y]
+            sz = vert[sheet_z]
+            sheet_pos = (sx, sy, sz)
+            sheet_triangle.append(sheet_pos)
+            target_triangle.append(obj_to_world @ vert.co)
+
+        # set squeeze factor = ratio of source area to projected area
+        source_area = area_tri(*sheet_triangle)
+        target_area = area_tri(*target_triangle)
+        squeeze = source_area / target_area
+        for loop in face.loops:
+            loop[squeeze_layer].uv = (0, squeeze)
+
+        # set face info: uv-coordinates (sheet and transplanted map), normal
+        # and vertex colors
+        vert_normal_sum = Vector((0, 0, 0))
+        for loop in face.loops:
+            # get sheet position
+            vert = loop.vert
+            sx = vert[sheet_x]
+            sy = vert[sheet_y]
+            sz = vert[sheet_z]
+            sheet_pos = (sx, sy, sz)
+
+            if sheet_pos not in normal_dict:
+                # we do not need to set this vertex
+                continue
+
+            # sheet position to uv-coordinates
+            loop[uv_sheet_xy].uv = (sx, sy)
+            loop[uv_sheet_xz].uv = (sx, sz)
+
+            vert_normal_sum += normal_dict[sheet_pos]
+            if uv_dict:  # only set uv-coords if we have uv-coords
+                loop[uv_layer].uv = uv_dict[sheet_pos]
+            loop[color_layer] = tuple(color_dict[sheet_pos]) + (1,)
+
+        # if face normal does not point in the same general direction as
+        # the averaged vertex normal, then flip the face normal
+        face.normal_update()
+        if face.normal.dot(vert_normal_sum) < 0:
+            face.normal_flip()
+
+    caustic_bm.normal_update()
+
+    # convert bmesh back to object
+    caustic_bm.to_mesh(caustic_obj.data)
+    caustic_bm.free()
+
+
+def trace_along_path(ray_origin, ray_direction, depsgraph, path_to_follow):
+    color = Color((1.0, 1.0, 1.0))
+    old_path = tuple()
+
+    # trace along the given chain of interactions
+    for obj, focus_on_interaction, _ in path_to_follow:
+        location, normal, uv, face_index = obj_raycast(
+            obj, ray_origin, ray_direction, depsgraph)
+
+        if location is None:
+            return None, None, None, None
+
+        # get hit face
+        obj_mesh = get_eval_mesh(obj, depsgraph)
+        face = obj_mesh.polygons[face_index]
+
+        # get material on hit face with given index
+        if obj.material_slots:
+            mat_idx = face.material_index
+            mat = obj.material_slots[mat_idx].material
+        else:
+            mat = None
+
+        # determine surface interactions from material
+        surface_shader, volume_params = material.get_material_shader(mat)
+
+        # focus on the interaction that that follows the path of the caustic
+        found = False
+        for kind, new_direction, tint in surface_shader(ray_direction, normal):
+            if kind == focus_on_interaction:
+                found = True
+                break
+
+        # if we cannot find this interaction, then the caustic will be empty
+        # at this position
+        if not found:
+            return None, None, None, None
+
+        if kind == 'DIFFUSE':
+            # see after the loop
+            break
+
+        assert new_direction is not None
+        # move the starting point a safe distance away from the object
+        offset = copysign(1e-5, new_direction.dot(face.normal))
+        new_origin = location + offset * face.normal
+
+        # compute volume absorption from previous interaction
+        volume = (1.0, 1.0, 1.0)
+        if old_path:
+            previous_link = old_path[-1]
+            if previous_link.volume_params is not None:
+                assert previous_link.kind in {'REFRACT', 'TRANSPARENT'}
+                # compute transmittance via Beer-Lambert law
+                volume_color, volume_density = previous_link.volume_params
+                ray_length = (location - ray_origin).length
+                volume = (exp(-(1 - val) * volume_density * ray_length)
+                          for val in volume_color)
+
+        # tint the color of the new ray
+        mult = (c * t * v for (c, t, v) in zip(color, tint, volume))
+        new_color = Color(mult)
+
+        # extend path of ray
+        headed_inside = new_direction.dot(normal) < 0
+        if kind in {'REFRACT', 'TRANSPARENT'} and headed_inside:
+            # consider volume absorption
+            new_path = old_path + (Link(obj, kind, volume_params),)
+        else:
+            # no volume absorption necessary
+            new_path = old_path + (Link(obj, kind, None),)
+
+        # prepare new ray
+        ray_origin = new_origin
+        ray_direction = new_direction
+        color = new_color
+        old_path = new_path
+
+    # create caustic vertex in front of object
+    offset = copysign(1e-4, -ray_direction.dot(face.normal))
+    position = location + offset * face.normal
+
+    return position, face.normal, color, uv
+
+
+def obj_raycast(obj, ray_origin, ray_direction, depsgraph):
+    # transform to object space
+    matrix = obj.evaluated_get(depsgraph).matrix_world
+    matrix_inv = matrix.inverted()
+    ray_origin_obj = matrix_inv @ ray_origin
+    ray_target_obj = matrix_inv @ (ray_origin + ray_direction)
+    ray_direction_obj = ray_target_obj - ray_origin_obj
+
+    # raycast
+    success, pos_obj, normal_obj, face_index, = obj.ray_cast(
+        ray_origin_obj, ray_direction_obj, depsgraph=depsgraph)
+
+    if not success:
+        return None, None, None, None
+
+    # calculate (smooth) normal
+    normal_obj, uv = calc_normal_and_uv(obj, depsgraph, face_index, pos_obj)
+    location = matrix @ pos_obj
+    normal = (matrix @ (pos_obj + normal_obj) - location).normalized()
+
+    return location, normal, uv, face_index
 
 
 def calc_normal_and_uv(obj, depsgraph, face_index, point):

@@ -32,6 +32,9 @@ LIGHTSHEET_OT_trace_lighsheet:
 - fill_caustic_faces
 - set_caustic_face_info
 
+LIGHTSHEET_OT_refine_caustics:
+- refine_caustic
+
 LIGHTSHEET_OT_finalize_caustics:
 - smooth_caustic_squeeze
 - cleanup_caustic
@@ -405,6 +408,10 @@ def fill_caustic_faces(lightsheet, caustic_bm):
                 # TODO can we use the u-coordinate for something useful?
                 loop[squeeze_layer].uv = (0, squeeze)
     ls_bm.free()
+
+    # mark all edges of the caustic for refinement
+    for edge in caustic_bm.edges:
+        edge.seam = True
 
 
 def set_caustic_face_info(caustic_bm, normal_dict, color_dict, uv_dict):

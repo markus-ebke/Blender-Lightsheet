@@ -63,6 +63,7 @@ class LIGHTSHEET_PT_tools(Panel):
         # here come the important operators
         col.operator("lightsheet.create", icon='LIGHTPROBE_PLANAR')
         col.operator("lightsheet.trace", icon='HIDE_OFF')
+        col.operator("lightsheet.refine", icon='MOD_MULTIRES')
         col.operator("lightsheet.finalize", icon='OUTPUT')
 
 

@@ -58,6 +58,7 @@ classes = (
     ui.LIGHTSHEET_PT_caustic,
     operators.LIGHTSHEET_OT_create_lightsheet,
     operators.LIGHTSHEET_OT_trace_lightsheet,
+    operators.LIGHTSHEET_OT_refine_caustic,
     operators.LIGHTSHEET_OT_finalize_caustics,
     properties.CausticPathLink,
     properties.CausticInfo,
