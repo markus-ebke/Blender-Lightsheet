@@ -36,7 +36,7 @@ import bmesh
 import bpy
 from bpy.types import Operator
 
-from lightsheet import material, trace, utils
+from lightsheet import material, utils
 
 
 # -----------------------------------------------------------------------------
@@ -148,7 +148,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
     def execute(self, context):
         # parameters for tracing
         lightsheet = context.object
-        utils.verify_lightsheet(lightsheet)
+        utils.setup_as_lightsheet(lightsheet)
         depsgraph = context.view_layer.depsgraph
         max_bounces = self.max_bounces
 
@@ -159,22 +159,12 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
                 hidden.append((obj, obj.hide_viewport))
                 obj.hide_viewport = True
 
-        # make sure caches are clean
-        trace.meshes_cache.clear()
-        material.materials_cache.clear()
-
         # raytrace lightsheet and convert resulting caustics to objects
         tic = perf_counter()
-        path_bm = trace.trace_lightsheet(lightsheet, depsgraph, max_bounces)
+        traced = utils.trace_lightsheet(lightsheet, depsgraph, max_bounces)
         cau_to_obj = partial(utils.convert_caustic_to_objects, lightsheet)
-        caustics = [cau_to_obj(pth, trc) for pth, trc in path_bm.items()]
+        caustics = [cau_to_obj(chain, data) for chain, data in traced.items()]
         toc = perf_counter()
-
-        # cleanup generated meshes and caches
-        for obj in trace.meshes_cache:
-            obj.to_mesh_clear()
-        trace.meshes_cache.clear()
-        material.materials_cache.clear()
 
         # get or setup collection for caustics
         coll = context.scene.collection.children.get("Caustics")
@@ -213,10 +203,11 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     # rel. error = (distance of midpoint to projected midpoint) / (edge length)
-    relative_error: bpy.props.FloatProperty(
-        name="Relative Error",
-        description="Relative error for adaptive subdivision",
-        default=0.1, min=0.0, precision=3
+    relative_tolerance_percent: bpy.props.FloatProperty(
+        name="Relative Tolerance",
+        description="Refine edge if error is >= tolerance (relative error = "
+        "distance(projected midpoint, midpoint of edge) / edge length)",
+        default=10.0, min=0.0, precision=1, subtype='PERCENTAGE',
     )
 
     @classmethod
@@ -228,15 +219,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         return False
 
     def invoke(self, context, event):
-        # set properties via dialog window
-        wm = context.window_manager
-        return wm.invoke_props_dialog(self)
-
-    def execute(self, context):
-        # parameters for tracing
         caustic = context.object
         assert caustic.caustic_info.path and not caustic.caustic_info.finalized
-        depsgraph = context.view_layer.depsgraph
 
         # check that we have a lightsheet
         lightsheet = caustic.caustic_info.lightsheet
@@ -262,23 +246,23 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
             self.report({"ERROR"}, msg)
             return {'CANCELLED'}
 
+        # set properties via dialog window
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self)
+
+    def execute(self, context):
+        # parameters for tracing
+        caustic = context.object
+        depsgraph = context.view_layer.depsgraph
+
         # gather stats
         num_verts_old = len(caustic.data.vertices)
 
-        # make sure caches are clean
-        trace.meshes_cache.clear()
-        material.materials_cache.clear()
-
         # refine
         tic = perf_counter()
-        trace.refine_caustic(caustic, depsgraph, self.relative_error)
+        rel_tol = self.relative_tolerance_percent / 100
+        utils.refine_caustic(caustic, depsgraph, rel_tol)
         toc = perf_counter()
-
-        # cleanup generated meshes and caches
-        for obj in trace.meshes_cache:
-            obj.to_mesh_clear()
-        trace.meshes_cache.clear()
-        material.materials_cache.clear()
 
         # report statistics
         incr_verts = len(caustic.data.polygons) - num_verts_old
@@ -315,7 +299,10 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         # operator makes sense only if some caustics are selected
         objects = context.selected_objects
         if objects:
-            return any(len(obj.caustic_info.path) > 0 for obj in objects)
+            for obj in objects:
+                caustic_info = obj.caustic_info
+                if caustic_info.path and not caustic_info.finalized:
+                    return True
         return False
 
     def invoke(self, context, event):

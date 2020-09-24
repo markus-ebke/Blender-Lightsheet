@@ -27,10 +27,14 @@ LIGHTSHEET_OT_create_lightsheet:
 - convert_to_lightsheet
 
 LIGHTSHEET_OT_trace_lighsheet:
-- verify_lighsheet
+- setup_as_lighsheet
+- trace_lightsheet
+- setup_lightsheet_first_ray
 - convert_caustics_to_objects
+- setup_caustic_bmesh
 - fill_caustic_faces
-- set_caustic_face_info
+- set_caustic_squeeze
+- set_caustic_face_data
 
 LIGHTSHEET_OT_refine_caustics:
 - refine_caustic
@@ -39,13 +43,15 @@ LIGHTSHEET_OT_finalize_caustics:
 - smooth_caustic_squeeze
 - cleanup_caustic
 """
-
+from collections import defaultdict
 from math import sqrt
 
 import bmesh
 import bpy
-from mathutils import Vector
+from mathutils import Color, Matrix, Vector
 from mathutils.geometry import area_tri, barycentric_transform
+
+from lightsheet import material, trace
 
 
 # -----------------------------------------------------------------------------
@@ -231,7 +237,7 @@ def convert_to_lightsheet(bm, light):
 # -----------------------------------------------------------------------------
 # Functions for trace lightsheet operator
 # -----------------------------------------------------------------------------
-def verify_lightsheet(obj):
+def setup_as_lightsheet(obj):
     """Setup the given object so that it can be used as a lightsheet."""
     assert obj is not None and isinstance(obj, bpy.types.Object)
 
@@ -285,28 +291,96 @@ def verify_lightsheet(obj):
     bm.free()
 
 
-def convert_caustic_to_objects(lightsheet, path, traced):
+def trace_lightsheet(lightsheet, depsgraph, max_bounces):
+    """Trace rays from lighsheet and return all caustics coordinates in dict"""
+    first_ray = setup_lightsheet_first_ray(lightsheet)
+
+    # convert lightsheet to bmesh
+    ls_bmesh = bmesh.new(use_operators=False)
+    ls_bmesh.from_mesh(lightsheet.data)
+
+    # coordinates of source position on lighsheet
+    sheet_x = ls_bmesh.verts.layers.float["Lightsheet X"]
+    sheet_y = ls_bmesh.verts.layers.float["Lightsheet Y"]
+    sheet_z = ls_bmesh.verts.layers.float["Lightsheet Z"]
+
+    # make sure caches are clean
+    trace.meshes_cache.clear()
+    material.materials_cache.clear()
+
+    # traced = {chain: {sheet_pos: CausticVert(location, color, uv, normal)}}
+    traced = defaultdict(dict)
+    for vert in ls_bmesh.verts:
+        sx = vert[sheet_x]
+        sy = vert[sheet_y]
+        sz = vert[sheet_z]
+        sheet_pos = (sx, sy, sz)
+        trace.trace_scene_recursive(first_ray(sheet_pos), sheet_pos, depsgraph,
+                                    max_bounces, traced)
+
+    # cleanup generated meshes and caches
+    ls_bmesh.free()
+    for obj in trace.meshes_cache:
+        obj.to_mesh_clear()
+    trace.meshes_cache.clear()
+    material.materials_cache.clear()
+
+    return traced
+
+
+def setup_lightsheet_first_ray(lightsheet):
+    """Generate a function that returns the ray for a given sheet position."""
+    sheet_to_world = lightsheet.matrix_world
+    origin = sheet_to_world.to_translation()
+
+    # setup first ray of given vertex coordinate depending on light type
+    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
+    white = Color((1.0, 1.0, 1.0))
+    white.freeze()  # will use as default value, therefore should be immutable
+    if lightsheet.parent.data.type == 'SUN':
+        # parallel projection along -z axis (local coordinates)
+        # note that origin = matrix @ Vector((0, 0, 0))
+        target = sheet_to_world @ Vector((0, 0, -1))
+        minus_z_axis = (target - origin).normalized()
+        minus_z_axis.freeze()  # will use as default value, should be immutable
+
+        # parallel projection in sun direction
+        def first_ray(sheet_pos):
+            ray_origin = sheet_to_world @ Vector(sheet_pos)
+            return trace.Ray(ray_origin, minus_z_axis, white, tuple())
+    else:
+        origin.freeze()  # will use as default value, should be immutable
+
+        # project from origin of lightsheet coordinate system
+        def first_ray(sheet_pos):
+            ray_direction = sheet_to_world @ Vector(sheet_pos) - origin
+            ray_direction.normalize()
+            return trace.Ray(origin, ray_direction, white, tuple())
+
+    return first_ray
+
+
+def convert_caustic_to_objects(lightsheet, chain, caustic_data):
     """Convert caustic bmesh to blender object with filled in faces."""
-    caustic_bm, normal_dict, color_dict, uv_dict = traced
+    # setup and fill caustic bmesh
+    caustic_bm = setup_caustic_bmesh(caustic_data)
+    fill_caustic_faces(caustic_bm, lightsheet)
+    set_caustic_squeeze(caustic_bm, sheet_to_world=lightsheet.matrix_world)
+    set_caustic_face_data(caustic_bm, caustic_data)
 
-    # check that bmesh has only vertices, no edges and no faces
-    assert len(caustic_bm.edges) == 0
-    assert len(caustic_bm.faces) == 0
+    # mark all edges of the caustic for refinement
+    for edge in caustic_bm.edges:
+        edge.seam = True
 
-    # fill faces
-    fill_caustic_faces(lightsheet, caustic_bm)
-    set_caustic_face_info(caustic_bm, normal_dict, color_dict, uv_dict)
-
-    # parent of caustic = last object
-    last_link = path[-1]
-    parent_obj = last_link.object
-    assert last_link.kind == 'DIFFUSE', path  # check consistency of path
+    # parent of caustic = object in last link
+    parent_obj = chain[-1].object
+    assert chain[-1].kind == 'DIFFUSE', chain  # check consistency of path
 
     # consistency check for copied uv-coordinates from the parent object
-    if not uv_dict:
-        assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
-    else:
+    if caustic_bm.loops.layers.uv.get("UVMap") is not None:
         assert parent_obj.data.uv_layers
+    else:
+        assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
 
     # think of a good name
     name = f"Caustic of {lightsheet.name} on {parent_obj.name}"
@@ -317,7 +391,7 @@ def convert_caustic_to_objects(lightsheet, path, traced):
     caustic_bm.free()
 
     # rename transplanted uvmap to avoid confusion
-    if uv_dict:
+    if parent_obj.data.uv_layers:
         parent_uv_layer = parent_obj.data.uv_layers.active
         assert parent_obj.data.uv_layers.active is not None
         uv_layer = me.uv_layers["UVMap"]
@@ -333,7 +407,7 @@ def convert_caustic_to_objects(lightsheet, path, traced):
     # fill out caustic_info property
     caustic.caustic_info.lightsheet = lightsheet
     caustic_path = caustic.caustic_info.path
-    for obj, kind, _ in path:
+    for obj, kind, _ in chain:
         item = caustic_path.add()
         item.object = obj
         item.kind = kind
@@ -341,8 +415,50 @@ def convert_caustic_to_objects(lightsheet, path, traced):
     return caustic
 
 
-def fill_caustic_faces(lightsheet, caustic_bm):
+def setup_caustic_bmesh(caustic_data):
+    """Create empty bmesh with data layers used for caustics"""
+    bm = bmesh.new()
+
+    # create vertex layers for sheet coordinates
+    sheet_x = bm.verts.layers.float.new("Lightsheet X")
+    sheet_y = bm.verts.layers.float.new("Lightsheet Y")
+    sheet_z = bm.verts.layers.float.new("Lightsheet Z")
+
+    # create uv-layers for sheet coordinates
+    bm.loops.layers.uv.new("Lightsheet XY")
+    bm.loops.layers.uv.new("Lightsheet XZ")
+
+    # create uv layer for caustic squeeze = ratio of source face area to
+    # projected face area
+    bm.loops.layers.uv.new("Caustic Squeeze")
+
+    # create vertex color layer for caustic tint
+    bm.loops.layers.color.new("Caustic Tint")
+
+    # create uv layer for transplanted coordinates (if any)
+    if all(data.uv is not None for data in caustic_data.values()):
+        bm.loops.layers.uv.new("UVMap")
+
+    # create vertices and given positions and set sheet coordinates
+    for sheet_pos in caustic_data:
+        # create vertex
+        position = caustic_data[sheet_pos].position
+        vert = bm.verts.new(position)
+
+        # set sheet coordinates
+        sx, sy, sz = sheet_pos
+        vert[sheet_x] = sx
+        vert[sheet_y] = sy
+        vert[sheet_z] = sz
+
+    return bm
+
+
+def fill_caustic_faces(caustic_bm, lightsheet):
     """Fill in faces of caustic bmesh using faces from lightsheet."""
+    assert len(caustic_bm.edges) == 0, len(caustic_bm.edges)
+    assert len(caustic_bm.faces) == 0, len(caustic_bm.faces)
+
     # convert lightsheet to bmesh
     ls_bm = bmesh.new()
     ls_bm.from_mesh(lightsheet.data)
@@ -374,14 +490,12 @@ def fill_caustic_faces(lightsheet, caustic_bm):
         assert (sx, sy, sz) not in sheet_to_caustic_vert
         sheet_to_caustic_vert[(sx, sy, sz)] = vert
 
-    # iterate through lighsheet faces and create corresponding caustic faces
-    squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
+    # iterate over lighsheet faces and create corresponding caustic faces
     for ls_face in ls_bm.faces:
+        # gather verts and sheet positions of caustic face
         caustic_verts = []
-        sheet_triangle = []
         for ls_vert in ls_face.verts:
             sheet_pos = ls_vert_to_sheet[ls_vert]
-            sheet_triangle.append(sheet_pos)
             vert = sheet_to_caustic_vert.get(sheet_pos)
             if vert is not None:
                 caustic_verts.append(vert)
@@ -389,33 +503,29 @@ def fill_caustic_faces(lightsheet, caustic_bm):
         # create edge or face from vertices
         if len(caustic_verts) == 2:
             # can only create an edge here, but this edge may already exist
-            # if we worked through a neighboring face before
+            # if we created a neighboring face before
             if caustic_bm.edges.get(caustic_verts) is None:
                 caustic_bm.edges.new(caustic_verts)
         elif len(caustic_verts) > 2:
-            # calculate area of lightsheet face in sheet
-            assert len(sheet_triangle) == 3, len(sheet_triangle)
-            source_area = area_tri(*sheet_triangle)
-
-            # create new caustic face and calculate its area
+            # create new caustic face
             assert len(caustic_verts) == 3, len(caustic_verts)
-            caustic_face = caustic_bm.faces.new(caustic_verts)
-            target_area = caustic_face.calc_area()
-
-            # set squeeze factor = ratio of source area to projected area
-            squeeze = source_area / target_area
-            for loop in caustic_face.loops:
-                # TODO can we use the u-coordinate for something useful?
-                loop[squeeze_layer].uv = (0, squeeze)
+            caustic_bm.faces.new(caustic_verts)
     ls_bm.free()
 
-    # mark all edges of the caustic for refinement
-    for edge in caustic_bm.edges:
-        edge.seam = True
 
+def set_caustic_squeeze(caustic_bm, sheet_to_world=None, caustic_to_world=None,
+                        faces=None):
+    """Set squeeze (= source area / projected area) for the given faces."""
+    # if no matrices given assume identity
+    if sheet_to_world is None:
+        sheet_to_world = Matrix()
+    if caustic_to_world is None:
+        caustic_to_world = Matrix()
 
-def set_caustic_face_info(caustic_bm, normal_dict, color_dict, uv_dict):
-    """Set caustic face normals, vertex colors and uv-coordinates (if any)."""
+    # if no faces given, iterate over every face
+    if faces is None:
+        faces = caustic_bm.faces
+
     # sheet coordinate access
     sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
     sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
@@ -429,30 +539,74 @@ def set_caustic_face_info(caustic_bm, normal_dict, color_dict, uv_dict):
         sz = vert[sheet_z]
         vert_to_sheet[vert] = (sx, sy, sz)
 
+    # iterate over caustic faces and calculate squeeze
+    squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
+    for face in faces:
+        assert len(face.verts) == 3, len(face.verts)
+
+        # gather coordinates and sheet positions of caustic face
+        source_triangle = []
+        target_triangle = []
+        for vert in face.verts:
+            sheet_pos = vert_to_sheet[vert]
+            source_triangle.append(sheet_to_world @ Vector(sheet_pos))
+            target_triangle.append(caustic_to_world @ vert.co)
+
+        # set squeeze factor = ratio of source area to projected area
+        squeeze = area_tri(*source_triangle) / area_tri(*target_triangle)
+        for loop in face.loops:
+            loop[squeeze_layer].uv = (0, squeeze)
+
+
+def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
+    """Set caustic vertex colors, uv-coordinates (if any) and face normals."""
+    if faces is None:
+        faces = caustic_bm.faces
+
+    # sheet coordinate access
+    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
+    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
+    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
+
+    # create vert -> sheet lookup table for faster access
+    vert_to_sheet = dict()
+    for vert in caustic_bm.verts:
+        sx = vert[sheet_x]
+        sy = vert[sheet_y]
+        sz = vert[sheet_z]
+        sheet_pos = (sx, sy, sz)
+        vert_to_sheet[vert] = sheet_pos
+
     # sheet coordinates uv-layers
     uv_sheet_xy = caustic_bm.loops.layers.uv["Lightsheet XY"]
     uv_sheet_xz = caustic_bm.loops.layers.uv["Lightsheet XZ"]
 
-    # uv-layer and vertex color access
-    if uv_dict:
-        uv_layer = caustic_bm.loops.layers.uv["UVMap"]
+    # vertex color and uv-layer access (take the first one that we can find)
     color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
+    uv_layer = None
+    for layer in caustic_bm.loops.layers.uv.values():
+        if layer not in (uv_sheet_xy, uv_sheet_xz):
+            uv_layer = layer
 
     # set transplanted uv-coordinates and vertex colors for faces
-    for face in caustic_bm.faces:
-        vert_normal_sum = Vector((0, 0, 0))
+    for face in faces:
+        vert_normal_sum = Vector((0.0, 0.0, 0.0))
         for loop in face.loops:
+            # get data for this vertex (if any)
             sheet_pos = vert_to_sheet[loop.vert]
+            data = sheet_to_data.get(sheet_pos)
+            if data is not None:
+                # sheet position to uv-coordinates
+                sx, sy, sz = sheet_pos
+                loop[uv_sheet_xy].uv = (sx, sy)
+                loop[uv_sheet_xz].uv = (sx, sz)
 
-            # sheet position to uv-coordinates
-            sx, sy, sz = sheet_pos
-            loop[uv_sheet_xy].uv = (sx, sy)
-            loop[uv_sheet_xz].uv = (sx, sz)
-
-            vert_normal_sum += normal_dict[sheet_pos]
-            if uv_dict:  # only set uv-coords if we have uv-coords
-                loop[uv_layer].uv = uv_dict[sheet_pos]
-            loop[color_layer] = tuple(color_dict[sheet_pos]) + (1,)
+                # set face data
+                loop[color_layer] = tuple(data.color) + (1,)
+                if uv_layer is not None:
+                    assert data.uv is not None
+                    loop[uv_layer].uv = data.uv
+                vert_normal_sum += data.normal
 
         # if face normal does not point in the same general direction as
         # the averaged vertex normal, then flip the face normal
@@ -461,6 +615,201 @@ def set_caustic_face_info(caustic_bm, normal_dict, color_dict, uv_dict):
             face.normal_flip()
 
     caustic_bm.normal_update()
+
+
+# -----------------------------------------------------------------------------
+# Functions for refine caustics operator
+# -----------------------------------------------------------------------------
+def refine_caustic(caustic, depsgraph, relative_tolerance):
+    """Do one adaptive subdivision of caustic bmesh."""
+    # world to caustic object coordinate transformation
+    world_to_caustic = caustic.matrix_world.inverted()
+
+    # caustic info
+    caustic_info = caustic.caustic_info
+    lightsheet = caustic_info.lightsheet
+    assert lightsheet is not None
+    first_ray = setup_lightsheet_first_ray(lightsheet)
+
+    # convert caustic_info.path into chain for trace
+    chain = []
+    for item in caustic_info.path:
+        chain.append(trace.Link(item.object, item.kind, None))
+
+    # convert caustic to bmesh
+    caustic_bm = bmesh.new()
+    caustic_bm.from_mesh(caustic.data)
+
+    # coordinates of source position on lighsheet
+    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
+    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
+    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
+
+    # create vert -> sheet lookup table for faster access
+    vert_to_sheet = dict()
+    for vert in caustic_bm.verts:
+        sx = vert[sheet_x]
+        sy = vert[sheet_y]
+        sz = vert[sheet_z]
+        vert_to_sheet[vert] = (sx, sy, sz)
+
+    # make sure caches are clean
+    trace.meshes_cache.clear()
+    material.materials_cache.clear()
+
+    def trace_midpoint(edge):
+        # get sheet positions of edge endpoints
+        vert1, vert2 = edge.verts
+        sheet_pos1 = Vector(vert_to_sheet[vert1])
+        sheet_pos2 = Vector(vert_to_sheet[vert2])
+
+        # calculate coordinates of edge midpoint and trace ray
+        sheet_mid = (sheet_pos1 + sheet_pos2) / 2
+        ray = first_ray(sheet_mid)
+        data = trace.trace_along_chain(ray, depsgraph, chain)
+
+        return tuple(sheet_mid), data
+
+    # gather all edges that we have to split
+    refine_edges = set()  # edges to subdivide
+    edge_to_sheet = dict()  # {edge: sheet pos of midpoint}
+    sheet_to_data = dict()  # {sheet pos: target data}
+
+    # gather edges that exceed the tolerance
+    for edge in (ed for ed in caustic_bm.edges if ed.seam):
+        # calc midpoint and target coordinates
+        sheet_mid, target_data = trace_midpoint(edge)
+        edge_to_sheet[edge] = sheet_mid
+        sheet_to_data[sheet_mid] = target_data
+
+        # calc error and wether we should keep the edge
+        if target_data is None:
+            refine_edges.add(edge)
+        else:
+            vert1, vert2 = edge.verts
+            edge_mid = (vert1.co + vert2.co) / 2
+            co = world_to_caustic @ target_data.position
+            rel_err = (edge_mid - co).length / edge.calc_length()
+            if rel_err >= relative_tolerance:
+                refine_edges.add(edge)
+
+    # if two edges of a triangle will be refined, also subdivide the other
+    # edge, this will make sure that we always end up with triangles
+    last_added = list(refine_edges)
+    newly_added = list()
+    while last_added:  # crawl through the mesh and select edges that we need
+        for edge in last_added:  # only last edges can change futher selection
+            for face in edge.link_faces:
+                assert len(face.edges) == 3  # must be a triangle
+                not_refined = [
+                    ed for ed in face.edges if ed not in refine_edges]
+                if len(not_refined) == 1:
+                    ed = not_refined[0]
+                    refine_edges.add(ed)
+                    newly_added.append(ed)
+
+        last_added = newly_added
+        newly_added = list()
+
+    # calculate targets for the missing edges
+    for edge in refine_edges:
+        if edge not in edge_to_sheet:
+            sheet_mid, target_data = trace_midpoint(edge)
+            edge_to_sheet[edge] = sheet_mid
+            sheet_to_data[sheet_mid] = target_data
+
+    # cleanup generated meshes and caches
+    for obj in trace.meshes_cache:
+        obj.to_mesh_clear()
+    trace.meshes_cache.clear()
+    material.materials_cache.clear()
+
+    # split edges
+    edgelist = list(refine_edges)
+    splits = bmesh.ops.subdivide_edges(caustic_bm, edges=edgelist, cuts=1,
+                                       use_grid_fill=True,
+                                       use_single_edge=True)
+
+    # ensure triangles
+    triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
+    if triang_less:
+        print(f"We have to triangulate {len(triang_less)} faces")
+        bmesh.ops.triangulate(caustic_bm, faces=triang_less)
+
+    # gather newly added vertices
+    dirty_verts = set()
+    for item in splits['geom_inner']:
+        if isinstance(item, bmesh.types.BMVert):
+            dirty_verts.add(item)
+
+    # gather edges that we may have to split next
+    dirty_edges = set()
+    for item in splits['geom']:
+        if isinstance(item, bmesh.types.BMEdge):
+            dirty_edges.add(item)
+
+    # verify newly added vertices
+    delete_verts = []
+    for edge in refine_edges:
+        # find the newly added vertex, it is one of the endpoints of a
+        # refined edge
+        v1, v2 = edge.verts
+        if v1 in dirty_verts:
+            vert = v1
+        else:
+            assert v2 in dirty_verts, (v1.co, v2.co)
+            vert = v2
+        assert vert not in vert_to_sheet
+
+        # get data for this vertex
+        sheet_pos = edge_to_sheet[edge]
+        data = sheet_to_data[sheet_pos]
+        if data is None:
+            delete_verts.append(vert)
+            del edge_to_sheet[edge]
+            del sheet_to_data[sheet_pos]
+        else:
+            # set correct vertex coordinates
+            vert.co = world_to_caustic @ data.position
+
+            # set sheet coords
+            sx, sy, sz = sheet_pos
+            vert[sheet_x] = sx
+            vert[sheet_y] = sy
+            vert[sheet_z] = sz
+
+    # remove verts that have no target
+    dirty_verts.difference_update(delete_verts)
+    bmesh.ops.delete(caustic_bm, geom=delete_verts, context='VERTS')
+
+    # gather the faces where we changed at least one vertex
+    dirty_faces = set()
+    for vert in dirty_verts:
+        for face in vert.link_faces:
+            dirty_faces.add(face)
+
+    # recalculate squeeze for dirty faces
+    sheet_to_world = lightsheet.matrix_world
+    caustic_to_world = caustic.matrix_world
+    set_caustic_squeeze(caustic_bm, sheet_to_world, caustic_to_world,
+                        faces=dirty_faces)
+
+    # set face data from color_dict, uv_dict and normal_dict
+    set_caustic_face_data(caustic_bm, sheet_to_data, faces=dirty_faces)
+
+    # mark edges for next refinement step
+    for edge in caustic_bm.edges:
+        edge.seam = edge in dirty_edges
+
+    # select only the dirty verts
+    for face in caustic_bm.faces:
+        face.select_set(False)
+    for vert in dirty_verts:
+        vert.select_set(True)
+
+    # convert bmesh back to object
+    caustic_bm.to_mesh(caustic.data)
+    caustic_bm.free()
 
 
 # -----------------------------------------------------------------------------

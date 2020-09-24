@@ -254,7 +254,7 @@ def setup_node_principled(node):
 
     # diffuse, reflection and possibly refraction
     def surface_shader(ray_direction, normal):
-        # mix_1: diffuse <-> refra tinted via transmission
+        # mix_1: diffuse <-> tinted refraction via transmission
         refra_tint = color * transmission
 
         # mix_2: mix_1 <-> tinted reflection via metallic
