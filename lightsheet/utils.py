@@ -38,6 +38,8 @@ LIGHTSHEET_OT_trace_lighsheet:
 
 LIGHTSHEET_OT_refine_caustics:
 - refine_caustic
+- split_edges
+- grow_boundary
 
 LIGHTSHEET_OT_finalize_caustics:
 - smooth_caustic_squeeze
@@ -360,13 +362,13 @@ def setup_lightsheet_first_ray(lightsheet):
     return first_ray
 
 
-def convert_caustic_to_objects(lightsheet, chain, caustic_data):
+def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     """Convert caustic bmesh to blender object with filled in faces."""
     # setup and fill caustic bmesh
-    caustic_bm = setup_caustic_bmesh(caustic_data)
+    caustic_bm = setup_caustic_bmesh(sheet_to_data)
     fill_caustic_faces(caustic_bm, lightsheet)
-    set_caustic_squeeze(caustic_bm, sheet_to_world=lightsheet.matrix_world)
-    set_caustic_face_data(caustic_bm, caustic_data)
+    set_caustic_squeeze(caustic_bm, matrix_sheet=lightsheet.matrix_world)
+    set_caustic_face_data(caustic_bm, sheet_to_data)
 
     # mark all edges of the caustic for refinement
     for edge in caustic_bm.edges:
@@ -415,7 +417,7 @@ def convert_caustic_to_objects(lightsheet, chain, caustic_data):
     return caustic
 
 
-def setup_caustic_bmesh(caustic_data):
+def setup_caustic_bmesh(sheet_to_data):
     """Create empty bmesh with data layers used for caustics"""
     bm = bmesh.new()
 
@@ -436,14 +438,15 @@ def setup_caustic_bmesh(caustic_data):
     bm.loops.layers.color.new("Caustic Tint")
 
     # create uv layer for transplanted coordinates (if any)
-    if all(data.uv is not None for data in caustic_data.values()):
+    if all(data.uv is not None for data in sheet_to_data.values()):
         bm.loops.layers.uv.new("UVMap")
 
     # create vertices and given positions and set sheet coordinates
-    for sheet_pos in caustic_data:
+    for sheet_pos, data in sheet_to_data.items():
+        assert data is not None, sheet_pos
+
         # create vertex
-        position = caustic_data[sheet_pos].position
-        vert = bm.verts.new(position)
+        vert = bm.verts.new(data.position)
 
         # set sheet coordinates
         sx, sy, sz = sheet_pos
@@ -513,14 +516,14 @@ def fill_caustic_faces(caustic_bm, lightsheet):
     ls_bm.free()
 
 
-def set_caustic_squeeze(caustic_bm, sheet_to_world=None, caustic_to_world=None,
+def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
                         faces=None):
     """Set squeeze (= source area / projected area) for the given faces."""
     # if no matrices given assume identity
-    if sheet_to_world is None:
-        sheet_to_world = Matrix()
-    if caustic_to_world is None:
-        caustic_to_world = Matrix()
+    if matrix_sheet is None:
+        matrix_sheet = Matrix()
+    if matrix_caustic is None:
+        matrix_caustic = Matrix()
 
     # if no faces given, iterate over every face
     if faces is None:
@@ -549,11 +552,13 @@ def set_caustic_squeeze(caustic_bm, sheet_to_world=None, caustic_to_world=None,
         target_triangle = []
         for vert in face.verts:
             sheet_pos = vert_to_sheet[vert]
-            source_triangle.append(sheet_to_world @ Vector(sheet_pos))
-            target_triangle.append(caustic_to_world @ vert.co)
+            source_triangle.append(matrix_sheet @ Vector(sheet_pos))
+            target_triangle.append(matrix_caustic @ vert.co)
 
         # set squeeze factor = ratio of source area to projected area
-        squeeze = area_tri(*source_triangle) / area_tri(*target_triangle)
+        source_area = area_tri(*source_triangle)
+        target_area = max(0.000001, area_tri(*target_triangle))
+        squeeze = source_area / target_area
         for loop in face.loops:
             loop[squeeze_layer].uv = (0, squeeze)
 
@@ -646,56 +651,165 @@ def refine_caustic(caustic, depsgraph, relative_tolerance):
     sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
 
     # create vert -> sheet lookup table for faster access
-    vert_to_sheet = dict()
+    vert_to_sheet_vec = dict()
     for vert in caustic_bm.verts:
         sx = vert[sheet_x]
         sy = vert[sheet_y]
         sz = vert[sheet_z]
-        vert_to_sheet[vert] = (sx, sy, sz)
+        vert_to_sheet_vec[vert] = Vector((sx, sy, sz))
 
     # make sure caches are clean
     trace.meshes_cache.clear()
     material.materials_cache.clear()
 
-    def trace_midpoint(edge):
-        # get sheet positions of edge endpoints
+    def calc_sheet_midpoint(edge):
         vert1, vert2 = edge.verts
-        sheet_pos1 = Vector(vert_to_sheet[vert1])
-        sheet_pos2 = Vector(vert_to_sheet[vert2])
-
-        # calculate coordinates of edge midpoint and trace ray
+        sheet_pos1 = vert_to_sheet_vec[vert1]
+        sheet_pos2 = vert_to_sheet_vec[vert2]
         sheet_mid = (sheet_pos1 + sheet_pos2) / 2
-        ray = first_ray(sheet_mid)
-        data = trace.trace_along_chain(ray, depsgraph, chain)
-
-        return tuple(sheet_mid), data
+        return tuple(sheet_mid)
 
     # gather all edges that we have to split
-    refine_edges = set()  # edges to subdivide
-    edge_to_sheet = dict()  # {edge: sheet pos of midpoint}
-    sheet_to_data = dict()  # {sheet pos: target data}
+    refine_edges = dict()  # {edge: sheet pos of midpoint (tuple)}
+    sheet_to_data = dict()  # {sheet pos: target data (trace.CausticData)}
 
     # gather edges that exceed the tolerance
+    deleted_edges = set()
     for edge in (ed for ed in caustic_bm.edges if ed.seam):
-        # calc midpoint and target coordinates
-        sheet_mid, target_data = trace_midpoint(edge)
-        edge_to_sheet[edge] = sheet_mid
-        sheet_to_data[sheet_mid] = target_data
+        # calc midpoint and target data
+        sheet_mid = calc_sheet_midpoint(edge)
+        ray = first_ray(sheet_mid)
+        target_data = trace.trace_along_chain(ray, depsgraph, chain)
+        sheet_to_data[tuple(sheet_mid)] = target_data
 
-        # calc error and wether we should keep the edge
         if target_data is None:
-            refine_edges.add(edge)
+            # edge will be deleted, split it and see later what happens
+            deleted_edges.add(edge)
+            refine_edges[edge] = sheet_mid
         else:
+            # calc error and wether we should keep the edge
             vert1, vert2 = edge.verts
             edge_mid = (vert1.co + vert2.co) / 2
-            co = world_to_caustic @ target_data.position
-            rel_err = (edge_mid - co).length / edge.calc_length()
-            if rel_err >= relative_tolerance:
-                refine_edges.add(edge)
+            mid_target = world_to_caustic @ target_data.position
 
-    # if two edges of a triangle will be refined, also subdivide the other
-    # edge, this will make sure that we always end up with triangles
-    last_added = list(refine_edges)
+            rel_err = (edge_mid - mid_target).length / edge.calc_length()
+            if rel_err >= relative_tolerance:
+                refine_edges[edge] = sheet_mid
+
+    # edges that belong to a face where at least one edge will be deleted
+    future_boundary_edges = set()
+    for face in caustic_bm.faces:
+        if any(edge in deleted_edges for edge in face.edges):
+            # face will disappear => new boundary edges
+            for edge in face.edges:
+                future_boundary_edges.add(edge)
+
+    # include all edges of (present or future) boundary faces
+    for edge in caustic_bm.edges:
+        if edge.is_boundary or edge in future_boundary_edges:
+            for face in edge.link_faces:
+                for other_edge in face.edges:
+                    refine_edges[other_edge] = calc_sheet_midpoint(other_edge)
+
+    # modify bmesh
+    split_verts, split_edges = split_caustic_edges(caustic_bm, refine_edges)
+    boundary_verts = grow_caustic_boundary(caustic_bm)
+
+    # ensure triangles
+    triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
+    if triang_less:
+        print(f"We have to triangulate {len(triang_less)} faces")
+        bmesh.ops.triangulate(caustic_bm, faces=triang_less)
+
+    # verify newly added vertices
+    new_verts = split_verts + boundary_verts
+    dead_verts = []
+    for vert in new_verts:
+        # get sheet coords
+        sx = vert[sheet_x]
+        sy = vert[sheet_y]
+        sz = vert[sheet_z]
+        sheet_pos = (sx, sy, sz)
+
+        # trace ray if necessary
+        if sheet_pos in sheet_to_data:
+            target_data = sheet_to_data[sheet_pos]
+        else:
+            ray = first_ray(sheet_pos)
+            target_data = trace.trace_along_chain(ray, depsgraph, chain)
+            sheet_to_data[sheet_pos] = target_data
+
+        # set coordinates or mark vertex for deletion
+        if target_data is None:
+            dead_verts.append(vert)
+            del sheet_to_data[sheet_pos]
+        else:
+            # set correct vertex coordinates
+            vert.co = world_to_caustic @ target_data.position
+
+    # remove verts that have no target
+    bmesh.ops.delete(caustic_bm, geom=dead_verts, context='VERTS')
+    new_verts = [vert for vert in new_verts if vert not in dead_verts]
+    assert all(vert.is_valid for vert in new_verts)
+    assert all(data is not None for data in sheet_to_data.values())
+
+    # cleanup generated meshes and caches
+    for obj in trace.meshes_cache:
+        obj.to_mesh_clear()
+    trace.meshes_cache.clear()
+    material.materials_cache.clear()
+
+    # gather the edges and faces where we changed at least one vertex
+    dirty_edges = set(split_edges)
+    for vert in boundary_verts:
+        if vert.is_valid:
+            for ed in vert.link_edges:
+                dirty_edges.add(ed)
+    dirty_faces = {face for vert in new_verts for face in vert.link_faces}
+
+    # recalculate squeeze and set face data for dirty faces
+    set_caustic_squeeze(caustic_bm, matrix_sheet=lightsheet.matrix_world,
+                        matrix_caustic=caustic.matrix_world, faces=dirty_faces)
+    set_caustic_face_data(caustic_bm, sheet_to_data, faces=dirty_faces)
+
+    # mark edges for next refinement step
+    for edge in caustic_bm.edges:
+        edge.seam = edge in dirty_edges
+
+    # select only the newly added verts
+    for face in caustic_bm.faces:
+        face.select_set(False)
+    for vert in new_verts:
+        vert.select_set(True)
+
+    # convert bmesh back to object
+    caustic_bm.to_mesh(caustic.data)
+    caustic_bm.free()
+
+
+def split_caustic_edges(caustic_bm, refine_edges):
+    """Subdivide the given edges and return the new vertices."""
+    # sheet coordinate access
+    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
+    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
+    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
+
+    def vert_to_sheet_vec(vert):
+        sx = vert[sheet_x]
+        sy = vert[sheet_y]
+        sz = vert[sheet_z]
+        return Vector((sx, sy, sz))
+
+    def calc_sheet_midpoint(edge):
+        vert1, vert2 = edge.verts
+        sheet_pos1 = vert_to_sheet_vec(vert1)
+        sheet_pos2 = vert_to_sheet_vec(vert2)
+        sheet_mid = (sheet_pos1 + sheet_pos2) / 2
+        return tuple(sheet_mid)
+
+    # balance refinement: if two edges of a triangle will be refined, also
+    # subdivide the other edge => after splitting we always get triangles
+    last_added = list(refine_edges.keys())
     newly_added = list()
     while last_added:  # crawl through the mesh and select edges that we need
         for edge in last_added:  # only last edges can change futher selection
@@ -705,36 +819,17 @@ def refine_caustic(caustic, depsgraph, relative_tolerance):
                     ed for ed in face.edges if ed not in refine_edges]
                 if len(not_refined) == 1:
                     ed = not_refined[0]
-                    refine_edges.add(ed)
+                    refine_edges[ed] = calc_sheet_midpoint(ed)
                     newly_added.append(ed)
 
         last_added = newly_added
         newly_added = list()
 
-    # calculate targets for the missing edges
-    for edge in refine_edges:
-        if edge not in edge_to_sheet:
-            sheet_mid, target_data = trace_midpoint(edge)
-            edge_to_sheet[edge] = sheet_mid
-            sheet_to_data[sheet_mid] = target_data
-
-    # cleanup generated meshes and caches
-    for obj in trace.meshes_cache:
-        obj.to_mesh_clear()
-    trace.meshes_cache.clear()
-    material.materials_cache.clear()
-
     # split edges
-    edgelist = list(refine_edges)
+    edgelist = list(refine_edges.keys())
     splits = bmesh.ops.subdivide_edges(caustic_bm, edges=edgelist, cuts=1,
                                        use_grid_fill=True,
                                        use_single_edge=True)
-
-    # ensure triangles
-    triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
-    if triang_less:
-        print(f"We have to triangulate {len(triang_less)} faces")
-        bmesh.ops.triangulate(caustic_bm, faces=triang_less)
 
     # gather newly added vertices
     dirty_verts = set()
@@ -742,74 +837,271 @@ def refine_caustic(caustic, depsgraph, relative_tolerance):
         if isinstance(item, bmesh.types.BMVert):
             dirty_verts.add(item)
 
-    # gather edges that we may have to split next
-    dirty_edges = set()
+    # get all newly added verts and set their sheet coordinates
+    split_verts = []
+    for edge, sheet_pos in refine_edges.items():
+        # one of the endpoints of a refined edge is a newly added vertex
+        v1, v2 = edge.verts
+        vert = v1 if v1 in dirty_verts else v2
+        assert vert in dirty_verts, sheet_pos
+
+        # set sheet coordinates
+        sx, sy, sz = sheet_pos
+        vert[sheet_x] = sx
+        vert[sheet_y] = sy
+        vert[sheet_z] = sz
+
+        split_verts.append(vert)
+
+    # gather edges that were split
+    split_edges = []
     for item in splits['geom']:
         if isinstance(item, bmesh.types.BMEdge):
-            dirty_edges.add(item)
+            split_edges.append(item)
 
-    # verify newly added vertices
-    delete_verts = []
-    for edge in refine_edges:
-        # find the newly added vertex, it is one of the endpoints of a
-        # refined edge
-        v1, v2 = edge.verts
-        if v1 in dirty_verts:
-            vert = v1
+    return split_verts, split_edges
+
+
+def grow_caustic_boundary(caustic_bm):
+    """Exand the boundary of the given caustic outwards in the lightsheet."""
+    # names of places:
+    # boundary: at the boundary of the original mesh
+    # outside:  extended outwards, at the boundary of the new mesh
+    # fan:      vertices around a central point (corner vertex at boundary)
+
+    # sheet coordinate access
+    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
+    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
+    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
+
+    # get (cached) sheet position as a mathutils.Vector
+    vert_to_sheet_vec = dict()
+
+    def get_sheet_vec(vert):
+        if vert in vert_to_sheet_vec:
+            return vert_to_sheet_vec[vert]
+
+        sx = vert[sheet_x]
+        sy = vert[sheet_y]
+        sz = vert[sheet_z]
+        sheet_vec = Vector((sx, sy, sz))
+        vert_to_sheet_vec[vert] = sheet_vec
+        return sheet_vec
+
+    # categorize connections of vertices at the boundary, note that adding new
+    # faces will change .link_edges of boundary vertices, therefore we have to
+    # save the original connections here before creating new faces
+    original_boundary_connections = dict()
+    for vert in (v for v in caustic_bm.verts if v.is_boundary):
+        # categorize linked edges based on connected faces
+        wire_edges, boundary_edges, inside_edges = [], [], []
+        for edge in vert.link_edges:
+            if edge.is_wire:
+                assert len(edge.link_faces) == 0
+                wire_edges.append(edge)
+            elif edge.is_boundary:
+                assert len(edge.link_faces) == 1
+                boundary_edges.append(edge)
+            else:
+                assert len(edge.link_faces) == 2
+                inside_edges.append(edge)
+
+        assert len(boundary_edges) in (0, 2, 4), len(boundary_edges)
+        conn = (wire_edges, boundary_edges, inside_edges)
+        original_boundary_connections[vert] = conn
+
+    # record new vertices and faces
+    outside_verts = dict()  # {outside vert (BMVert): sheet_vec (Vector)}
+
+    def create_vert(sheet_pos):
+        new_vert = caustic_bm.verts.new()
+        outside_verts[new_vert] = sheet_pos
+        return new_vert
+
+    new_faces = []
+
+    def create_triangle(v1, v2, v3):
+        face = caustic_bm.faces.new((v1, v2, v3))
+        new_faces.append(face)
+        return face
+
+    # create outside pointing triangle with a boundary edge at the base and an
+    # outside vertex at the tip
+    boundary_edge_to_outside_vert = dict()  # {boundary edge: new outside vert}
+    original_boundary_edges = [ed for ed in caustic_bm.edges if ed.is_boundary]
+    for edge in original_boundary_edges:
+        # get verts that are connected by the edge
+        vert_first, vert_second = edge.verts
+
+        # get the vertex opposite of the edge
+        assert len(edge.link_faces) == 1
+        face = edge.link_faces[0]
+        assert len(face.verts) == 3
+        other_verts = [ve for ve in face.verts if ve not in edge.verts]
+        assert len(other_verts) == 1
+        vert_opposite = other_verts[0]
+
+        # sheet coordinates of the three vertices
+        sheet_first = get_sheet_vec(vert_first)
+        sheet_second = get_sheet_vec(vert_second)
+        sheet_opposite = get_sheet_vec(vert_opposite)
+
+        # mirror opposite vertex across the edge to get the outside vertex
+        # want: sheet_midpoint == (sheet_opposite + sheet_outside) / 2
+        sheet_midpoint = (sheet_first + sheet_second) / 2
+        sheet_outside = 2 * sheet_midpoint - sheet_opposite
+        vert_outside = create_vert(sheet_outside)
+
+        # add outside vertex to mappings
+        boundary_edge_to_outside_vert[edge] = vert_outside
+
+        # create face
+        create_triangle(vert_first, vert_second, vert_outside)
+
+    # create inside pointing trinagle with a boundary vertex at the tip and an
+    # outside edge at the base
+    targetmap = dict()  # {vert to replace: replacement vert}
+    for vert, conn in original_boundary_connections.items():
+        sheet_vert = get_sheet_vec(vert)
+        wire_edges, boundary_edges, inside_edges = conn
+
+        # degree = number of neighbours
+        degree = len(boundary_edges) + len(inside_edges)
+        assert 2 <= degree <= 5, (sheet_vert, boundary_edges, inside_edges)
+
+        if degree == 2:
+            # 300° outside angle, needs two more vertices to create three faces
+            assert len(boundary_edges) == 2, (sheet_vert, boundary_edges)
+            # assert len(inside_edges) == 0, (sheet_vert, inside_edges)
+
+            # get sheet coordinates of neighbouring vertices
+            verts_fan = []
+            for edge in boundary_edges:
+                # get other vert in this edge and its sheet coordinates
+                vert_opposite = edge.other_vert(vert)
+                sheet_opposite = get_sheet_vec(vert_opposite)
+
+                # mirror across vertex
+                # want: sheet_vert == (sheet_opposite + sheet_outside) / 2
+                sheet_fan = 2 * sheet_vert - sheet_opposite
+                vert_fan = create_vert(sheet_fan)
+
+                # add to list
+                verts_fan.append((vert_fan, edge))
+            vert_fan_a, from_edge_a = verts_fan[0]
+            vert_fan_b, from_edge_b = verts_fan[1]
+
+            # get the outside neighbours of vert_fan_a/b, note that because
+            # of mirroring we change the order in which we connect the vertices
+            vert_outside_a = boundary_edge_to_outside_vert[from_edge_b]
+            vert_outside_b = boundary_edge_to_outside_vert[from_edge_a]
+
+            # create three new faces
+            create_triangle(vert, vert_outside_a, vert_fan_a)
+            create_triangle(vert, vert_fan_a, vert_fan_b)
+            create_triangle(vert, vert_fan_b, vert_outside_b)
+        elif degree == 3:
+            # 240° outside angle, needs one more vertex to create two faces
+            assert len(boundary_edges) == 2, (sheet_vert, boundary_edges)
+            assert len(inside_edges) == 1, (sheet_vert, inside_edges)
+
+            # get vertex of edge on the inside and its sheet coordinates
+            inside_edge = inside_edges[0]
+            vert_opposite = inside_edge.other_vert(vert)
+            sheet_opposite = get_sheet_vec(vert_opposite)
+
+            # mirror across vertex
+            # want: sheet_vert == (sheet_opposite + sheet_fan) / 2
+            sheet_fan = 2 * sheet_vert - sheet_opposite
+            vert_fan = create_vert(sheet_fan)
+
+            # get neighbours of outside vert
+            edge_a, edge_b = boundary_edges
+            vert_outside_a = boundary_edge_to_outside_vert[edge_a]
+            vert_outside_b = boundary_edge_to_outside_vert[edge_b]
+
+            # create two new faces
+            create_triangle(vert, vert_outside_a, vert_fan)
+            create_triangle(vert, vert_fan, vert_outside_b)
+        elif degree == 4:
+            # the vert is at an 180° angle or at an X-shaped intersection
+            assert len(boundary_edges) in (2, 4), (sheet_vert, boundary_edges)
+            # assert len(inside_edges) in (0, 2), (sheet_vert, inside_edges)
+
+            if len(boundary_edges) == 2:  # 180° angle
+                edge_a, edge_b = boundary_edges
+                vert_outside_a = boundary_edge_to_outside_vert[edge_a]
+                vert_outside_b = boundary_edge_to_outside_vert[edge_b]
+                create_triangle(vert, vert_outside_a, vert_outside_b)
+            else:  # X-shaped intersection of two 120° angles
+                # pairs of boundary edges have the same outside vertex, merge
+                # the corresponding pairs of outside vertices
+                assert len(boundary_edges) == 4, (sheet_vert, boundary_edges)
+
+                # get outside verts
+                outside_stuff = []
+                for edge in boundary_edges:
+                    vert_outside = boundary_edge_to_outside_vert[edge]
+                    sheet_outside = outside_verts[vert_outside]
+                    outside_stuff.append((edge, vert_outside, sheet_outside))
+
+                # pair up the verts via distance in sheet
+                sheet_outside_a = outside_stuff[0][2]
+                outside_stuff.sort(
+                    key=lambda item: (item[2] - sheet_outside_a).length
+                )
+                pair_1 = outside_stuff[0], outside_stuff[1]
+                pair_2 = outside_stuff[2], outside_stuff[3]
+
+                # merge pairs
+                for pair in (pair_1, pair_2):
+                    outside_a, outside_b = pair
+                    edge_a, vert_outside_a, sheet_outside_a = outside_a
+                    edge_b, vert_outside_b, sheet_outside_b = outside_b
+
+                    # merge vertices at median point
+                    sheet_merge = (sheet_outside_a + sheet_outside_b) / 2
+                    outside_verts[vert_outside_a] = sheet_merge
+                    targetmap[vert_outside_b] = vert_outside_a
+        elif degree == 5:
+            # 120° outside angle => the boundary edges connected to this vertex
+            # have the same outside vertex, merge these vertices
+            edge_a, edge_b = boundary_edges
+
+            # get verts to merge and their sheet coordinates
+            vert_outside_a = boundary_edge_to_outside_vert[edge_a]
+            vert_outside_b = boundary_edge_to_outside_vert[edge_b]
+            sheet_outside_a = outside_verts[vert_outside_a]
+            sheet_outside_b = outside_verts[vert_outside_b]
+
+            # merge vertices at median point
+            sheet_merge = (sheet_outside_a + sheet_outside_b) / 2
+            outside_verts[vert_outside_a] = sheet_merge
+            targetmap[vert_outside_b] = vert_outside_a
         else:
-            assert v2 in dirty_verts, (v1.co, v2.co)
-            vert = v2
-        assert vert not in vert_to_sheet
+            # degree < 2 or degree > 5 should not be possible, but it might
+            # happen if suddenly a hole starts to appear in an area with uneven
+            # subdivision (usually inside the caustic and not at the boundary)
+            pass
 
-        # get data for this vertex
-        sheet_pos = edge_to_sheet[edge]
-        data = sheet_to_data[sheet_pos]
-        if data is None:
-            delete_verts.append(vert)
-            del edge_to_sheet[edge]
-            del sheet_to_data[sheet_pos]
-        else:
-            # set correct vertex coordinates
-            vert.co = world_to_caustic @ data.position
+    # remove the doubled verts
+    bmesh.ops.weld_verts(caustic_bm, targetmap=targetmap)
+    outside_verts = {v: s for v, s in outside_verts.items() if v.is_valid}
 
-            # set sheet coords
-            sx, sy, sz = sheet_pos
-            vert[sheet_x] = sx
-            vert[sheet_y] = sy
-            vert[sheet_z] = sz
+    # set sheet coordinates for new vertices
+    for vert, sheet_pos in outside_verts.items():
+        sx, sy, sz = sheet_pos
+        vert[sheet_x] = sx
+        vert[sheet_y] = sy
+        vert[sheet_z] = sz
 
-    # remove verts that have no target
-    dirty_verts.difference_update(delete_verts)
-    bmesh.ops.delete(caustic_bm, geom=delete_verts, context='VERTS')
+    # update uv coordinates and vertex colors for new faces
+    ret = bmesh.ops.face_attribute_fill(caustic_bm, faces=new_faces,
+                                        use_normals=False,  # calc normal later
+                                        use_data=True)
+    assert len(ret["faces_fail"]) == 0, ret["faces_fail"]
 
-    # gather the faces where we changed at least one vertex
-    dirty_faces = set()
-    for vert in dirty_verts:
-        for face in vert.link_faces:
-            dirty_faces.add(face)
-
-    # recalculate squeeze for dirty faces
-    sheet_to_world = lightsheet.matrix_world
-    caustic_to_world = caustic.matrix_world
-    set_caustic_squeeze(caustic_bm, sheet_to_world, caustic_to_world,
-                        faces=dirty_faces)
-
-    # set face data from color_dict, uv_dict and normal_dict
-    set_caustic_face_data(caustic_bm, sheet_to_data, faces=dirty_faces)
-
-    # mark edges for next refinement step
-    for edge in caustic_bm.edges:
-        edge.seam = edge in dirty_edges
-
-    # select only the dirty verts
-    for face in caustic_bm.faces:
-        face.select_set(False)
-    for vert in dirty_verts:
-        vert.select_set(True)
-
-    # convert bmesh back to object
-    caustic_bm.to_mesh(caustic.data)
-    caustic_bm.free()
+    return list(outside_verts)
 
 
 # -----------------------------------------------------------------------------
