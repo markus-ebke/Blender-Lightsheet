@@ -122,7 +122,7 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
             if any(step[1] in {'REFLECT', 'REFRACT'} for step in old_chain):
                 # get the caustic data mapping for this chain of interactions
                 caustic_key = old_chain + (Link(obj, kind, None),)
-                caustic_data = traced[caustic_key]
+                sheet_to_data = traced[caustic_key]
 
                 # place caustic vertex in front of object
                 offset = copysign(1e-4, -ray_direction.dot(face.normal))
@@ -137,7 +137,7 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
 
                 # set data
                 vert_data = CausticData(position, color, uv, face.normal)
-                caustic_data[sheet_pos] = vert_data
+                sheet_to_data[sheet_pos] = vert_data
         elif len(old_chain) < max_bounces:
             assert new_direction is not None
             # move the starting point a safe distance away from the object
@@ -234,8 +234,8 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         # interaction that follows the path of the caustic
         surface_shader, volume_params = material.get_material_shader(mat)
         found = False
-        for kind, new_direction, tint in surface_shader(ray_direction, normal):
-            if kind == kind_to_follow:
+        for interaction in surface_shader(ray_direction, normal):
+            if interaction.kind == kind_to_follow:
                 found = True
                 break
 
@@ -243,6 +243,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         if not found:
             return None
 
+        kind, new_direction, tint = interaction
         if kind == 'DIFFUSE':
             caustic_key = old_chain + (Link(obj, kind, None),)
 

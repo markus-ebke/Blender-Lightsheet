@@ -28,11 +28,9 @@ LIGHTSHEET_OT_refine_caustics: Adaptively subdivide selected caustics.
 LIGHTSHEET_OT_finalize_caustics: Smooth out and cleanup selected caustics.
 """
 
-from functools import partial
 from math import tan
 from time import perf_counter
 
-import bmesh
 import bpy
 from bpy.types import Operator
 
@@ -103,7 +101,7 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         toc = perf_counter()
 
         # convert to lightsheet object and add to scene
-        lightsheet = utils.convert_to_lightsheet(bm, light)
+        lightsheet = utils.convert_bmesh_to_lightsheet(bm, light)
         coll = context.scene.collection
         coll.objects.link(lightsheet)
 
@@ -147,31 +145,27 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 
     def execute(self, context):
         # parameters for tracing
-        lightsheet = context.object
-        utils.setup_as_lightsheet(lightsheet)
+        lightsheet = utils.verify_object_is_lightsheet(context.object)
         depsgraph = context.view_layer.depsgraph
         max_bounces = self.max_bounces
-
-        # hide lightsheets and caustics from raycast
-        hidden = []
-        for obj in depsgraph.view_layer.objects:
-            if "lightsheet" in obj.name.lower() or obj.caustic_info.path:
-                hidden.append((obj, obj.hide_viewport))
-                obj.hide_viewport = True
 
         # raytrace lightsheet and convert resulting caustics to objects
         tic = perf_counter()
         traced = utils.trace_lightsheet(lightsheet, depsgraph, max_bounces)
-        cau_to_obj = partial(utils.convert_caustic_to_objects, lightsheet)
-        caustics = [cau_to_obj(chain, data) for chain, data in traced.items()]
+        caustics = []
+        for chain, sheet_to_data in traced.items():
+            obj = utils.convert_caustic_to_objects(
+                lightsheet, chain, sheet_to_data)
+            caustics.append(obj)
         toc = perf_counter()
 
         # get or setup collection for caustics
-        coll = context.scene.collection.children.get("Caustics")
+        coll_name = f"Caustics in {context.scene.name}"
+        coll = context.scene.collection.children.get(coll_name)
         if coll is None:
-            coll = bpy.data.collections.get("Caustics")
+            coll = bpy.data.collections.get(coll_name)
             if coll is None:
-                coll = bpy.data.collections.new("Caustics")
+                coll = bpy.data.collections.new(coll_name)
             context.scene.collection.children.link(coll)
 
         # get material and add caustic object to caustic collection
@@ -180,10 +174,6 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
             mat = material.get_caustic_material(light, obj.parent)
             obj.data.materials.append(mat)
             coll.objects.link(obj)
-
-        # restore original state for hidden lightsheets and caustics
-        for obj, state in hidden:
-            obj.hide_viewport = state
 
         # report statistics
         c_stats = "{} caustics".format(len(caustics))
@@ -265,11 +255,10 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         toc = perf_counter()
 
         # report statistics
-        incr_verts = len(caustic.data.polygons) - num_verts_old
-        incr_frac = incr_verts / num_verts_old if num_verts_old != 0 else 0
-        f_stats = f"Added {incr_verts:,} (+{incr_frac:.1%}) verts"
+        incr_verts = len(caustic.data.vertices) - num_verts_old
+        v_stats = f"Added {incr_verts:,} verts"
         t_stats = "{:.3f}s".format(toc-tic)
-        self.report({"INFO"}, f"{f_stats} in {t_stats}")
+        self.report({"INFO"}, f"{v_stats} in {t_stats}")
 
         return {"FINISHED"}
 
@@ -319,41 +308,25 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
                 skipped += 1
                 continue
 
-            # convert from object
-            bm = bmesh.new()
-            bm.from_mesh(obj.data)
-
-            # smooth out and cleanup
-            utils.smooth_caustic_squeeze(bm)
-            utils.cleanup_caustic(bm, self.intensity_threshold)
-            # TODO for cycles overlapping faces should be stacked in layers
-
-            # if no faces remain, delete the caustic (if wanted by the user)
-            if len(bm.faces) == 0 and self.delete_empty_caustics:
-                bm.free()
+            utils.finalize_caustic(obj, self.intensity_threshold)
+            if self.delete_empty_caustics and len(obj.data.polygons) == 0:
+                # delete caustic object
                 bpy.data.objects.remove(obj)
                 deleted += 1
-                continue
-
-            # convert bmesh back to object
-            bm.to_mesh(obj.data)
-            bm.free()
-
-            # mark as finalized
-            obj.caustic_info.finalized = True
-            finalized += 1
-
+            else:
+                # count as finalized
+                finalized += 1
         toc = perf_counter()
+
+        if not self.delete_empty_caustics:
+            assert deleted == 0, (finalized, deleted, skipped)
 
         # report statistics
         f_stats = f"Finalized {finalized}"
-        s_stats = f"skipped {skipped}"
         d_stats = f"deleted {deleted}"
+        s_stats = f"skipped {skipped}"
         t_stats = "{:.3f}s".format(toc-tic)
-        if self.delete_empty_caustics:
-            message = f"{f_stats}, {s_stats}, {d_stats} in {t_stats}"
-            self.report({"INFO"}, message)
-        else:
-            self.report({"INFO"}, f"{f_stats}, {s_stats} in {t_stats}")
+        message = f"{f_stats}, {d_stats} and {s_stats} in {t_stats}"
+        self.report({"INFO"}, message)
 
         return {"FINISHED"}

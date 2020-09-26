@@ -22,6 +22,7 @@
 
 LIGHTSHEET_PT_tools: Panel in sidebar to access the operators.
 LIGHTSHEET_PT_caustic: Summary of caustic information.
+The tool panel shows some information about the active object.
 """
 
 from bpy.types import Panel
@@ -38,24 +39,6 @@ class LIGHTSHEET_PT_tools(Panel):
     def draw(self, context):
         layout = self.layout
 
-        # info about active object
-        obj = context.object
-        if obj:
-            col = layout.column()
-            col.label(text=f"Active object: '{obj.name}'", icon='OBJECT_DATA')
-            if obj.type == 'LIGHT':
-                col.label(text="Object is light source", icon='LIGHT')
-            elif obj.type == 'MESH':
-                if obj.parent is not None and obj.parent.type == 'LIGHT':
-                    txt = "Object can be lightsheet"
-                    col.label(text=txt, icon='LIGHTPROBE_PLANAR')
-                elif obj.caustic_info.path:
-                    if obj.caustic_info.finalized:
-                        txt = "Object is caustic (finalized)"
-                    else:
-                        txt = "Object is caustic"
-                    col.label(text=txt, icon='SHADERFX')
-
         # prepare layout for important operators
         col = layout.column(align=True)
         col.scale_y = 1.5
@@ -65,6 +48,47 @@ class LIGHTSHEET_PT_tools(Panel):
         col.operator("lightsheet.trace", icon='HIDE_OFF')
         col.operator("lightsheet.refine", icon='MOD_MULTIRES')
         col.operator("lightsheet.finalize", icon='OUTPUT')
+
+        # info about active object
+        obj = context.object
+        if obj:
+            display_obj_info(obj, layout.box())
+
+
+def display_obj_info(obj, layout):
+    """Draw info and stats about lightsheet related objects."""
+    layout.label(text=f"Active object: '{obj.name}'", icon='OBJECT_DATA')
+    if obj.type == 'LIGHT':
+        # object is light, does it have a lightsheet?
+        layout.label(text="Object is light source", icon='LIGHT')
+        has_lightsheet = any("lightsheet" in child.name.lower()
+                             for child in obj.children)
+        if has_lightsheet:
+            layout.label(text="Light has a lightsheet", icon='CHECKBOX_HLT')
+        else:
+            layout.label(text="Light has no lightsheet", icon='CHECKBOX_DEHLT')
+    elif obj.type == 'MESH':
+        # object is mesh, is it a lightsheet or caustic?
+        if obj.parent is not None and obj.parent.type == 'LIGHT':
+            # object is or can be lightsheet
+            verb = "is" if "lightsheet" in obj.name.lower() else "can be"
+            layout.label(text=f"Object {verb} lightsheet",
+                         icon='LIGHTPROBE_PLANAR')
+        elif obj.caustic_info.path:
+            # object is caustic
+            if not obj.caustic_info.finalized:
+                txt = "Object is caustic"
+            else:
+                txt = "Object is caustic (finalized)"
+            layout.label(text=txt, icon='SHADERFX')
+        else:
+            layout.label(text="Object is unrelated mesh", icon='MESH_GRID')
+
+        # mesh stats
+        num_verts = len(obj.data.vertices)
+        num_faces = len(obj.data.polygons)
+        stats = f"Verts: {num_verts:,}, Faces: {num_faces:,}"
+        layout.label(text=stats, icon='MESH_DATA')
 
 
 class LIGHTSHEET_PT_caustic(Panel):

@@ -126,7 +126,7 @@ def invalid_surface_shader(ray_direction, normal):
 
 def diffuse_surface_shader(ray_direction, normal):
     # caustic on object, but no tracing of further rays
-    return [('DIFFUSE', None, None)]
+    return [Interaction('DIFFUSE', None, None)]
 
 
 # setup surface interaction from BSDF node ------------------------------------
@@ -148,7 +148,7 @@ def setup_node_glossy(node):
 
     def surface_shader(ray_direction, normal):
         refle = ray_direction.reflect(normal)
-        return [('REFLECT', refle, color)]
+        return [Interaction('REFLECT', refle, color)]
 
     return surface_shader
 
@@ -160,7 +160,7 @@ def setup_node_transparent(node):
     color = Color(node.inputs['Color'].default_value[:3])
 
     def surface_shader(ray_direction, normal):
-        return [('TRANSPARENT', ray_direction, color)]
+        return [Interaction('TRANSPARENT', ray_direction, color)]
 
     return surface_shader
 
@@ -180,7 +180,7 @@ def setup_node_refraction(node):
     def surface_shader(ray_direction, normal):
         refra = refract(ray_direction, normal, ior)
         if refra is not None:
-            return [('REFRACT', refra, color)]
+            return [Interaction('REFRACT', refra, color)]
         else:
             return []
 
@@ -206,13 +206,13 @@ def setup_node_glass(node):
 
         if refra is None:
             # total internal reflection
-            return [('REFLECT', refle, color)]
+            return [Interaction('REFLECT', refle, color)]
 
         # reflection and refraction
         reflectivity = fresnel(ray_direction, normal, ior)
         interactions = [
-            ('REFLECT', refle, reflectivity * color),
-            ('REFRACT', refra, (1 - reflectivity) * color)
+            Interaction('REFLECT', refle, reflectivity * color),
+            Interaction('REFRACT', refra, (1 - reflectivity) * color)
         ]
         return interactions
 
@@ -275,17 +275,17 @@ def setup_node_principled(node):
 
         interactions = []
         if handle_diffuse:
-            interactions.append(('DIFFUSE', None, None))
+            interactions.append(Interaction('DIFFUSE', None, None))
 
         if refle_tint.v > 0:
             # some light is reflected
             refle = ray_direction.reflect(normal)
-            interactions.append(('REFLECT', refle, refle_tint))
+            interactions.append(Interaction('REFLECT', refle, refle_tint))
 
         if refra_tint.v > 0 and handle_refraction:
             # some light is transmitted
             refra = refract(ray_direction, normal, ior)
-            interactions.append(('REFRACT', refra, refra_tint))
+            interactions.append(Interaction('REFRACT', refra, refra_tint))
 
         return interactions
 
@@ -377,7 +377,7 @@ def setup_node_mix(node):
 
         # diffuse
         if 'DIFFUSE' in interactions_map1 or 'DIFFUSE' in interactions_map2:
-            interactions.append(('DIFFUSE', None, None))
+            interactions.append(Interaction('DIFFUSE', None, None))
 
         # all other interactions
         for kind in ['REFLECT', 'REFRACT', 'TRANSPARENT']:
@@ -388,11 +388,11 @@ def setup_node_mix(node):
                 col = weight1 * col1
                 if vec2 is not None:
                     col += weight2 * col2
-                interactions.append((kind, vec, col))
+                interactions.append(Interaction(kind, vec, col))
             elif vec2 is not None:
                 vec = vec2
                 col = weight2 * col2
-                interactions.append((kind, vec, col))
+                interactions.append(Interaction(kind, vec, col))
 
         return interactions
 
