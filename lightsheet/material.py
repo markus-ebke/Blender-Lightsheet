@@ -602,11 +602,9 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     emission = nodes.new(type='ShaderNodeEmission')
     mix_rgb_diffuse = nodes.new(type='ShaderNodeMixRGB')
     math = nodes.new(type='ShaderNodeMath')
-    checker = nodes.new(type='ShaderNodeTexChecker')
     mix_rgb_light = nodes.new(type='ShaderNodeMixRGB')
     energy = nodes.new(type='ShaderNodeValue')
     sep_xyz = nodes.new(type='ShaderNodeSeparateXYZ')
-    uv_map = nodes.new(type='ShaderNodeUVMap')
     color = nodes.new(type='ShaderNodeRGB')
     vertex_color = nodes.new(type='ShaderNodeVertexColor')
     uv_squeeze = nodes.new(type='ShaderNodeUVMap')
@@ -618,11 +616,9 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     emission.location = (-180, -700)
     mix_rgb_diffuse.location = (-420, -550)
     math.location = (-420, -850)
-    checker.location = (-660, -400)
     mix_rgb_light.location = (-660, -650)
     energy.location = (-660, -880)
     sep_xyz.location = (-660, -1000)
-    uv_map.location = (-900, -400)
     color.location = (-900, -600)
     vertex_color.location = (-900, -820)
     uv_squeeze.location = (-900, -1000)
@@ -633,17 +629,9 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     mix_rgb_diffuse.inputs['Fac'].default_value = 1.0
     mix_rgb_diffuse.inputs['Color1'].default_value = (1.0, 1.0, 1.0, 1.0)
     math.operation = 'MULTIPLY'
-    checker.inputs['Color1'].default_value = (1.0, 0.0, 1.0, 1.0)
-    checker.inputs['Color2'].default_value = (0.0, 1.0, 0.0, 1.0)
-    checker.inputs['Scale'].default_value = 42.0
-    checker.label = "Original Diffuse Color"
-    checker.use_custom_color = True
-    checker.color = (1.0, 0.0, 0.0)
     mix_rgb_light.blend_type = 'MULTIPLY'
     mix_rgb_light.inputs['Fac'].default_value = 1.0
     energy.label = "Light Energy"
-    if parent_obj.data.uv_layers.active:
-        uv_map.uv_map = parent_obj.data.uv_layers.active.name
     color.label = "Light Color"
     vertex_color.layer_name = 'Caustic Tint'
     uv_squeeze.uv_map = 'Caustic Squeeze'
@@ -655,14 +643,44 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     links.new(emission.outputs[0], add_shader.inputs[1])
     links.new(mix_rgb_diffuse.outputs[0], emission.inputs[0])
     links.new(math.outputs[0], emission.inputs[1])
-    links.new(checker.outputs[0], mix_rgb_diffuse.inputs[1])
     links.new(mix_rgb_light.outputs[0], mix_rgb_diffuse.inputs[2])
     links.new(energy.outputs[0], math.inputs[0])
     links.new(sep_xyz.outputs['Y'], math.inputs[1])
-    links.new(uv_map.outputs[0], checker.inputs[0])
     links.new(color.outputs[0], mix_rgb_light.inputs[1])
     links.new(vertex_color.outputs[0], mix_rgb_light.inputs[2])
     links.new(uv_squeeze.outputs[0], sep_xyz.inputs[0])
+
+    # if uv map exists add default texture, else add default color
+    active_uv_layer = parent_obj.data.uv_layers.active
+    if active_uv_layer is not None:
+        # add nodes
+        texture = nodes.new(type='ShaderNodeTexChecker')
+        uv_map = nodes.new(type='ShaderNodeUVMap')
+
+        # change location
+        texture.location = (-660, -400)
+        uv_map.location = (-900, -400)
+
+        # change settings
+        texture.inputs['Color1'].default_value = (1.0, 0.0, 1.0, 1.0)
+        texture.inputs['Color2'].default_value = (0.0, 1.0, 0.0, 1.0)
+        texture.inputs['Scale'].default_value = 42.0
+        texture.label = "Original Diffuse Color"
+        texture.use_custom_color = True
+        texture.color = (1.0, 0.0, 0.0)
+        uv_map.uv_map = active_uv_layer.name
+
+        # add links
+        links.new(texture.outputs[0], mix_rgb_diffuse.inputs[1])
+        links.new(uv_map.outputs[0], texture.inputs[0])
+    else:
+        diffuse = nodes.new(type='ShaderNodeRGB')
+        diffuse.location = (-660, -400)
+        diffuse.outputs[0].default_value = (1.0, 0.0, 1.0, 1.0)
+        diffuse.label = "Original Diffuse Color"
+        diffuse.use_custom_color = True
+        diffuse.color = (1.0, 0.0, 0.0)
+        links.new(diffuse.outputs[0], mix_rgb_diffuse.inputs[1])
 
     # add driver
     add_drivers_from_light(color, energy, light)

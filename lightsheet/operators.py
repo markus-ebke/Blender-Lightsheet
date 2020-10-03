@@ -127,6 +127,11 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         name="Max Bounces", description="Maximum number of light bounces",
         default=4, min=0
     )
+    dismiss_empty_caustics: bpy.props.BoolProperty(
+        name="Dismiss empty caustics",
+        description="Don't create caustics for raypaths that produce no faces",
+        default=True
+    )
 
     @classmethod
     def poll(cls, context):
@@ -152,11 +157,18 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         # raytrace lightsheet and convert resulting caustics to objects
         tic = perf_counter()
         traced = utils.trace_lightsheet(lightsheet, depsgraph, max_bounces)
+        traced_sorted = sorted(
+            traced.items(), key=lambda item: utils.chain_complexity(item[0]))
         caustics = []
-        for chain, sheet_to_data in traced.items():
+        for chain, sheet_to_data in traced_sorted:
             obj = utils.convert_caustic_to_objects(
                 lightsheet, chain, sheet_to_data)
-            caustics.append(obj)
+
+            # if wanted delete empty caustics
+            if self.dismiss_empty_caustics and len(obj.data.polygons) == 0:
+                bpy.data.objects.remove(obj)
+            else:
+                caustics.append(obj)
         toc = perf_counter()
 
         # get or setup collection for caustics
@@ -187,54 +199,64 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 # Refine caustics
 # -----------------------------------------------------------------------------
 class LIGHTSHEET_OT_refine_caustic(Operator):
-    """Refine selected caustic by adaptively subdividing edges"""
+    """Refine selected caustics by adaptively subdividing edges"""
     bl_idname = "lightsheet.refine"
     bl_label = "Refine Caustic"
     bl_options = {'REGISTER', 'UNDO'}
 
-    # rel. error = (distance of midpoint to projected midpoint) / (edge length)
     relative_tolerance_percent: bpy.props.FloatProperty(
-        name="Relative Tolerance",
+        name="Relative Error Tolerance",
         description="Refine edge if error is >= tolerance (relative error = "
         "distance(projected midpoint, midpoint of edge) / edge length)",
         default=10.0, min=0.0, precision=1, subtype='PERCENTAGE',
+    )
+    grow_boundary: bpy.props.BoolProperty(
+        name="Grow Boundary",
+        description="Expand the boundary",
+        default=True
     )
 
     @classmethod
     def poll(cls, context):
         # operator makes sense only for caustics
-        obj = context.object
-        if obj is not None:
-            return obj.caustic_info.path and not obj.caustic_info.finalized
+        objects = context.selected_objects
+        if objects:
+            for obj in objects:
+                caustic_info = obj.caustic_info
+                if caustic_info.path and not caustic_info.finalized:
+                    return True
         return False
 
     def invoke(self, context, event):
-        caustic = context.object
-        assert caustic.caustic_info.path and not caustic.caustic_info.finalized
+        assert context.selected_objects
+        for obj in context.selected_objects:
+            # skip non-refinable objects
+            if not obj.caustic_info.path or obj.caustic_info.finalized:
+                continue
 
-        # check that we have a lightsheet
-        lightsheet = caustic.caustic_info.lightsheet
-        if lightsheet is None:
-            reasons = "it has no lightsheet"
-            msg = f"Cannot refine {caustic.name} because {reasons}!"
-            self.report({"ERROR"}, msg)
-            return {'CANCELLED'}
+            # check that we have a lightsheet
+            lightsheet = obj.caustic_info.lightsheet
+            if lightsheet is None:
+                reasons = "it has no lightsheet"
+                msg = f"Cannot refine {obj.name} because {reasons}!"
+                self.report({"ERROR"}, msg)
+                return {'CANCELLED'}
 
-        # check that light (parent of lightsheet) is valid
-        light = lightsheet.parent
-        if light is None or light.type != 'LIGHT':
-            reasons = "lightsheet parent is not a light"
-            msg = f"Cannot refine {caustic.name} because {reasons}!"
-            self.report({"ERROR"}, msg)
-            return {'CANCELLED'}
+            # check that light (parent of lightsheet) is valid
+            light = lightsheet.parent
+            if light is None or light.type != 'LIGHT':
+                reasons = "lightsheet parent is not a light"
+                msg = f"Cannot refine {obj.name} because {reasons}!"
+                self.report({"ERROR"}, msg)
+                return {'CANCELLED'}
 
-        # check that light type is supported
-        light_type = light.data.type
-        if light_type not in {'SUN', 'SPOT', 'POINT'}:
-            reasons = f"{light_type.capitalize()} lights are not supported"
-            msg = f"Cannot refine {caustic.name} because {reasons}!"
-            self.report({"ERROR"}, msg)
-            return {'CANCELLED'}
+            # check that light type is supported
+            light_type = light.data.type
+            if light_type not in {'SUN', 'SPOT', 'POINT'}:
+                reasons = f"{light_type.capitalize()} lights are not supported"
+                msg = f"Cannot refine {obj.name} because {reasons}!"
+                self.report({"ERROR"}, msg)
+                return {'CANCELLED'}
 
         # set properties via dialog window
         wm = context.window_manager
@@ -242,21 +264,24 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 
     def execute(self, context):
         # parameters for tracing
-        caustic = context.object
         depsgraph = context.view_layer.depsgraph
-
-        # gather stats
-        num_verts_old = len(caustic.data.vertices)
-
-        # refine
-        tic = perf_counter()
         rel_tol = self.relative_tolerance_percent / 100
-        utils.refine_caustic(caustic, depsgraph, rel_tol)
+
+        num_verts_old, num_verts_now = 0, 0
+        tic = perf_counter()
+        for obj in context.selected_objects:
+            # skip non-refinable objects
+            if not obj.caustic_info.path or obj.caustic_info.finalized:
+                continue
+
+            # refine
+            num_verts_old += len(obj.data.vertices)
+            utils.refine_caustic(obj, depsgraph, rel_tol, self.grow_boundary)
+            num_verts_now += len(obj.data.vertices)
         toc = perf_counter()
 
         # report statistics
-        incr_verts = len(caustic.data.vertices) - num_verts_old
-        v_stats = f"Added {incr_verts:,} verts"
+        v_stats = "Added {:,} verts".format(num_verts_now-num_verts_old)
         t_stats = "{:.3f}s".format(toc-tic)
         self.report({"INFO"}, f"{v_stats} in {t_stats}")
 
@@ -266,7 +291,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Finalize caustics
 # -----------------------------------------------------------------------------
-class LIGHTSHEET_OT_finalize_caustics(Operator):
+class LIGHTSHEET_OT_finalize_caustic(Operator):
     """Smooth and cleanup selected caustics"""
     bl_idname = "lightsheet.finalize"
     bl_label = "Finalize Caustic"

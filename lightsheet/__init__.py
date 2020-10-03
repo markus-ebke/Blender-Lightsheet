@@ -59,7 +59,7 @@ classes = (
     operators.LIGHTSHEET_OT_create_lightsheet,
     operators.LIGHTSHEET_OT_trace_lightsheet,
     operators.LIGHTSHEET_OT_refine_caustic,
-    operators.LIGHTSHEET_OT_finalize_caustics,
+    operators.LIGHTSHEET_OT_finalize_caustic,
     properties.CausticPathLink,
     properties.CausticInfo,
 )

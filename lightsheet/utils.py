@@ -33,6 +33,7 @@ LIGHTSHEET_OT_trace_lighsheet:
 - verify_object_is_lighsheet
 - trace_lightsheet
 - setup_lightsheet_first_ray
+- chain_complexity
 - convert_caustics_to_objects
 - setup_caustic_bmesh
 - fill_caustic_faces
@@ -297,6 +298,7 @@ def verify_object_is_lightsheet(obj):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     verify_lightsheet_coordinate_layers(bm)
+    bmesh.ops.triangulate(bm, faces=bm.faces)  # ensure triangles
     bm.to_mesh(obj.data)
     bm.free()
 
@@ -383,6 +385,16 @@ def setup_lightsheet_first_ray(lightsheet):
     return first_ray
 
 
+def chain_complexity(chain):
+    """Calculate a number representing the complexity of the given ray path."""
+    weights = {'DIFFUSE': 1, 'TRANSPARENT': 2, 'REFLECT': 3, 'REFRACT': 4}
+    cplx = 0
+    for link in chain:
+        # each link gets its own power of ten
+        cplx = 10 * cplx + weights[link.kind]
+    return cplx
+
+
 def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     """Convert caustic bmesh to blender object with filled in faces."""
     # setup and fill caustic bmesh
@@ -443,6 +455,16 @@ def setup_caustic_bmesh(sheet_to_data):
     """Create empty bmesh with data layers used for caustics"""
     caustic_bm = bmesh.new()
 
+    # create vertex color layer for caustic tint
+    caustic_bm.loops.layers.color.new("Caustic Tint")
+
+    # create uv-layer for transplanted coordinates (if any)
+    if all(data.uv is not None for data in sheet_to_data.values()):
+        caustic_bm.loops.layers.uv.new("UVMap")
+
+    # create uv-layer for squeeze = ratio of source area to projected area
+    caustic_bm.loops.layers.uv.new("Caustic Squeeze")
+
     # create vertex layers for sheet coordinates
     sheet_x = caustic_bm.verts.layers.float.new("Lightsheet X")
     sheet_y = caustic_bm.verts.layers.float.new("Lightsheet Y")
@@ -451,17 +473,6 @@ def setup_caustic_bmesh(sheet_to_data):
     # create uv-layers for sheet coordinates
     caustic_bm.loops.layers.uv.new("Lightsheet XY")
     caustic_bm.loops.layers.uv.new("Lightsheet XZ")
-
-    # create uv layer for caustic squeeze = ratio of source face area to
-    # projected face area
-    caustic_bm.loops.layers.uv.new("Caustic Squeeze")
-
-    # create vertex color layer for caustic tint
-    caustic_bm.loops.layers.color.new("Caustic Tint")
-
-    # create uv layer for transplanted coordinates (if any)
-    if all(data.uv is not None for data in sheet_to_data.values()):
-        caustic_bm.loops.layers.uv.new("UVMap")
 
     # create vertices and given positions and set sheet coordinates
     for sheet_pos, data in sheet_to_data.items():
@@ -648,7 +659,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
 # -----------------------------------------------------------------------------
 # Functions for refine caustics operator
 # -----------------------------------------------------------------------------
-def refine_caustic(caustic, depsgraph, relative_tolerance):
+def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     """Do one adaptive subdivision of caustic bmesh."""
     # world to caustic object coordinate transformation
     world_to_caustic = caustic.matrix_world.inverted()
@@ -719,24 +730,46 @@ def refine_caustic(caustic, depsgraph, relative_tolerance):
             if rel_err >= relative_tolerance:
                 refine_edges[edge] = sheet_mid
 
-    # edges that belong to a face where at least one edge will be deleted
-    future_boundary_edges = set()
-    for face in caustic_bm.faces:
-        if any(edge in deleted_edges for edge in face.edges):
-            # face will disappear => new boundary edges
-            for edge in face.edges:
-                future_boundary_edges.add(edge)
+    if grow_boundary:
+        # edges that belong to a face where at least one edge will be deleted
+        future_boundary_edges = set()
+        for face in caustic_bm.faces:
+            if any(edge in deleted_edges for edge in face.edges):
+                # face will disappear => new boundary edges
+                for edge in face.edges:
+                    future_boundary_edges.add(edge)
 
-    # include all edges of (present or future) boundary faces
-    for edge in caustic_bm.edges:
-        if edge.is_boundary or edge in future_boundary_edges:
-            for face in edge.link_faces:
-                for other_edge in face.edges:
-                    refine_edges[other_edge] = calc_sheet_midpoint(other_edge)
+        # include all edges of (present or future) boundary faces
+        for edge in caustic_bm.edges:
+            if edge.is_boundary or edge in future_boundary_edges:
+                for face in edge.link_faces:
+                    for other_edge in face.edges:
+                        sheet_mid = calc_sheet_midpoint(other_edge)
+                        refine_edges[other_edge] = sheet_mid
 
     # modify bmesh
     split_verts, split_edges = split_caustic_edges(caustic_bm, refine_edges)
-    boundary_verts = grow_caustic_boundary(caustic_bm)
+    if grow_boundary:
+        # find any offending vertices?
+        is_growable = True
+        for vert in caustic_bm.verts:
+            if vert.is_boundary and len(vert.link_edges) > 6:
+                sx = vert[sheet_x]
+                sy = vert[sheet_y]
+                sz = vert[sheet_z]
+                sheet_vec = Vector((sx, sy, sz))
+                print(f"Sheet: {sheet_vec}, links: {len(vert.link_edges)}")
+                is_growable = False
+
+        if is_growable:
+            boundary_verts = grow_caustic_boundary(caustic_bm)
+        else:
+            # raise exception
+            msg = "cannot grow boundary, found verts with too many neighbours"
+            info = "printed sheet coordinates of offending points to terminal"
+            raise RuntimeError(f"{msg}; {info}")
+    else:
+        boundary_verts = []
 
     # ensure triangles
     triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
@@ -782,7 +815,8 @@ def refine_caustic(caustic, depsgraph, relative_tolerance):
     trace.meshes_cache.clear()
     material.materials_cache.clear()
 
-    # gather the edges and faces where we changed at least one vertex
+    # gather the edges that we may split next and the faces where we changed at
+    # least one vertex (and now have to recalculate face data)
     dirty_edges = set(split_edges)
     for vert in boundary_verts:
         if vert.is_valid:
@@ -933,7 +967,7 @@ def grow_caustic_boundary(caustic_bm):
         conn = (wire_edges, boundary_edges, inside_edges)
         original_boundary_connections[vert] = conn
 
-    # record new vertices and faces
+    # record new vertices as they are created and save sheet coordinates
     outside_verts = dict()  # {outside vert (BMVert): sheet_vec (Vector)}
 
     def create_vert(sheet_pos):
@@ -941,7 +975,8 @@ def grow_caustic_boundary(caustic_bm):
         outside_verts[new_vert] = sheet_pos
         return new_vert
 
-    new_faces = []
+    # record new faces as they are created
+    new_faces = []  # list of new faces
 
     def create_triangle(v1, v2, v3):
         face = caustic_bm.faces.new((v1, v2, v3))
@@ -990,7 +1025,7 @@ def grow_caustic_boundary(caustic_bm):
 
         # degree = number of neighbours
         degree = len(boundary_edges) + len(inside_edges)
-        assert 2 <= degree <= 5, (sheet_vert, boundary_edges, inside_edges)
+        assert 2 <= degree <= 6, (sheet_vert, boundary_edges, inside_edges)
 
         if degree == 2:
             # 300° outside angle, needs two more vertices to create three faces
@@ -1101,13 +1136,31 @@ def grow_caustic_boundary(caustic_bm):
             sheet_merge = (sheet_outside_a + sheet_outside_b) / 2
             outside_verts[vert_outside_a] = sheet_merge
             targetmap[vert_outside_b] = vert_outside_a
+        elif degree == 6:
+            # 60° outside angle, one face of a complete hexagon is missing,
+            # except triangles that grew from the boundary edges already lie on
+            # top of this face
+            edge_a, edge_b = boundary_edges
+            vert_a = edge_a.other_vert(vert)
+            vert_b = edge_b.other_vert(vert)
+            vert_outside_a = boundary_edge_to_outside_vert[edge_a]
+            vert_outside_b = boundary_edge_to_outside_vert[edge_b]
+
+            # we can merge vert_a and vert_outside_b because they overlap and
+            # do the same for vert_b and vert_outside_a, note that when we
+            # merge the vertices later one of the faces over edge_a and edge_b
+            # will be deleted
+            outside_verts[vert_outside_a] = get_sheet_vec(vert_b)
+            targetmap[vert_outside_a] = vert_b
+            outside_verts[vert_outside_b] = get_sheet_vec(vert_a)
+            targetmap[vert_outside_b] = vert_a
         else:
-            # degree < 2 or degree > 5 should not be possible, but it might
+            # degree < 2 or degree > 6 should not be possible, but it might
             # happen if suddenly a hole starts to appear in an area with uneven
             # subdivision (usually inside the caustic and not at the boundary)
             pass
 
-    # remove the doubled verts
+    # remove the doubled verts (will delete faces if case degree == 6 happend)
     bmesh.ops.weld_verts(caustic_bm, targetmap=targetmap)
     outside_verts = {v: s for v, s in outside_verts.items() if v.is_valid}
 
@@ -1119,6 +1172,7 @@ def grow_caustic_boundary(caustic_bm):
         vert[sheet_z] = sz
 
     # update uv coordinates and vertex colors for new faces
+    new_faces = [face for face in new_faces if face.is_valid]
     ret = bmesh.ops.face_attribute_fill(caustic_bm, faces=new_faces,
                                         use_normals=False,  # calc normal later
                                         use_data=True)
