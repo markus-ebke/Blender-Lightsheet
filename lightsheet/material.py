@@ -512,6 +512,7 @@ def get_caustic_material(light, parent_obj):
 
     # setup material
     mat = bpy.data.materials.new(mat_name)
+    mat.cycles.sample_as_light = False  # disable multiple-importance sampling
     mat.use_nodes = True
     mat.node_tree.nodes.clear()
 
@@ -540,7 +541,7 @@ def add_nodes_for_cycles(node_tree, light):
     math = nodes.new(type='ShaderNodeMath')
     color = nodes.new(type='ShaderNodeRGB')
     vertex_color = nodes.new(type='ShaderNodeVertexColor')
-    energy = nodes.new(type='ShaderNodeValue')
+    strength = nodes.new(type='ShaderNodeValue')
     sep_xyz = nodes.new(type='ShaderNodeSeparateXYZ')
     uv_squeeze = nodes.new(type='ShaderNodeUVMap')
 
@@ -555,7 +556,7 @@ def add_nodes_for_cycles(node_tree, light):
     math.location = (-660, 250)
     color.location = (-900, 600)
     vertex_color.location = (-900, 380)
-    energy.location = (-900, 220)
+    strength.location = (-900, 220)
     sep_xyz.location = (-900, 100)
     uv_squeeze.location = (-1140, 100)
 
@@ -570,7 +571,7 @@ def add_nodes_for_cycles(node_tree, light):
     math.operation = 'MULTIPLY'
     color.label = "Light Color"
     vertex_color.layer_name = 'Caustic Tint'
-    energy.label = "Light Energy"
+    strength.label = "Light Strength"
     uv_squeeze.uv_map = 'Caustic Squeeze'
 
     # add links
@@ -585,12 +586,12 @@ def add_nodes_for_cycles(node_tree, light):
     links.new(math.outputs[0], emission.inputs[1])
     links.new(color.outputs[0], mix_rgb.inputs[1])
     links.new(vertex_color.outputs[0], mix_rgb.inputs[2])
-    links.new(energy.outputs[0], math.inputs[0])
+    links.new(strength.outputs[0], math.inputs[0])
     links.new(sep_xyz.outputs['Y'], math.inputs[1])
     links.new(uv_squeeze.outputs[0], sep_xyz.inputs[0])
 
     # add driver
-    add_drivers_from_light(color, energy, light)
+    add_drivers_from_light(color, strength, light)
 
 
 def add_nodes_for_eevee(node_tree, light, parent_obj):
@@ -603,7 +604,7 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     mix_rgb_diffuse = nodes.new(type='ShaderNodeMixRGB')
     math = nodes.new(type='ShaderNodeMath')
     mix_rgb_light = nodes.new(type='ShaderNodeMixRGB')
-    energy = nodes.new(type='ShaderNodeValue')
+    strength = nodes.new(type='ShaderNodeValue')
     sep_xyz = nodes.new(type='ShaderNodeSeparateXYZ')
     color = nodes.new(type='ShaderNodeRGB')
     vertex_color = nodes.new(type='ShaderNodeVertexColor')
@@ -617,7 +618,7 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     mix_rgb_diffuse.location = (-420, -550)
     math.location = (-420, -850)
     mix_rgb_light.location = (-660, -650)
-    energy.location = (-660, -880)
+    strength.location = (-660, -880)
     sep_xyz.location = (-660, -1000)
     color.location = (-900, -600)
     vertex_color.location = (-900, -820)
@@ -631,7 +632,7 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     math.operation = 'MULTIPLY'
     mix_rgb_light.blend_type = 'MULTIPLY'
     mix_rgb_light.inputs['Fac'].default_value = 1.0
-    energy.label = "Light Energy"
+    strength.label = "Light Strength"
     color.label = "Light Color"
     vertex_color.layer_name = 'Caustic Tint'
     uv_squeeze.uv_map = 'Caustic Squeeze'
@@ -644,7 +645,7 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     links.new(mix_rgb_diffuse.outputs[0], emission.inputs[0])
     links.new(math.outputs[0], emission.inputs[1])
     links.new(mix_rgb_light.outputs[0], mix_rgb_diffuse.inputs[2])
-    links.new(energy.outputs[0], math.inputs[0])
+    links.new(strength.outputs[0], math.inputs[0])
     links.new(sep_xyz.outputs['Y'], math.inputs[1])
     links.new(color.outputs[0], mix_rgb_light.inputs[1])
     links.new(vertex_color.outputs[0], mix_rgb_light.inputs[2])
@@ -683,27 +684,51 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
         links.new(diffuse.outputs[0], mix_rgb_diffuse.inputs[1])
 
     # add driver
-    add_drivers_from_light(color, energy, light)
+    add_drivers_from_light(color, strength, light)
 
 
-def add_drivers_from_light(color, energy, light):
-    # light color
+def add_drivers_from_light(color, strength, light):
+    """Setup drivers for color and light strength nodes."""
+    # setup driver for light color node
     for idx in range(3):
-        driver = color.outputs[0].driver_add("default_value", idx)
-        driver.driver.type = 'AVERAGE'
+        fcurve = color.outputs[0].driver_add("default_value", idx)
+        driver = fcurve.driver
+        driver.type = 'AVERAGE'
 
-        var = driver.driver.variables.new()
+        # color from light
+        var = driver.variables.new()
         var.name = "color"
         var.targets[0].id_type = 'LIGHT'
         var.targets[0].id = light.data
         var.targets[0].data_path = f'color[{idx}]'
 
-    # light energy
-    driver = energy.outputs[0].driver_add("default_value")
-    driver.driver.type = 'AVERAGE'
+    # setup driver for light strength node
+    fcurve = strength.outputs[0].driver_add("default_value")
+    driver = fcurve.driver
+    driver.type = 'SCRIPTED'
 
-    var = driver.driver.variables.new()
+    # energy from light
+    var = driver.variables.new()
     var.name = "energy"
     var.targets[0].id_type = 'LIGHT'
     var.targets[0].id = light.data
     var.targets[0].data_path = 'energy'
+
+    # caustic emission shader strength = light strength (in W/m^2) / pi
+    # light strength = light energy / area over which light is emitted
+    if light.data.type in {'POINT', 'SPOT'}:
+        # point and spot lights emit their energy over a sphere (area = 4*pi)
+        driver.expression = "energy / (4 * pi * pi)"
+    else:
+        # strength of sun light is already in W/m^2
+        driver.expression = "energy / pi"
+
+    # Note: I don't know why we need to divide light strength by pi to get the
+    # emission shader strength, I found this out by rendering some test scenes:
+    # - Sun light with strength 3.14159 shines perpendicular onto diffuse plane
+    #   with diffuse color (1.0, 1.0, 1.0) => rendered pixel values are 1.0.
+    # - Point light with strength 39.4784 W is at center of a unit sphere
+    #   diffuse color (1.0, 1.0, 1.0) => rendered pixel values are 1.0.
+    # When replacing the sun light or point light by appropriate meshes with
+    # emission shaders the pixel values rendered by Cycles are 1.0 when the
+    # emission strength is 1.0.

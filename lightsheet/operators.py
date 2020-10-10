@@ -208,7 +208,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         name="Relative Error Tolerance",
         description="Refine edge if error is >= tolerance (relative error = "
         "distance(projected midpoint, midpoint of edge) / edge length)",
-        default=10.0, min=0.0, precision=1, subtype='PERCENTAGE',
+        default=10.0, min=0.0, soft_max=100.0, precision=1,
+        subtype='PERCENTAGE',
     )
     grow_boundary: bpy.props.BoolProperty(
         name="Grow Boundary",
@@ -299,8 +300,9 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 
     intensity_threshold: bpy.props.FloatProperty(
         name="Intensity Treshold",
-        description="Remove faces less intense than this cutoff",
-        default=0.00001, min=0.0, precision=6
+        description="Remove faces that are less intense than this cutoff "
+        "(caustic emission strength < intensity threshold * light strength)",
+        default=0.00001, min=0.0, precision=6, subtype='FACTOR'
     )
     delete_empty_caustics: bpy.props.BoolProperty(
         name="Delete empty caustics",
