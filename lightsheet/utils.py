@@ -31,6 +31,7 @@ LIGHTSHEET_OT_create_lightsheet:
 
 LIGHTSHEET_OT_trace_lighsheet:
 - verify_object_is_lighsheet
+- setup_sheet_property
 - trace_lightsheet
 - setup_lightsheet_first_ray
 - chain_complexity
@@ -305,6 +306,24 @@ def verify_object_is_lightsheet(obj):
     return obj
 
 
+def setup_sheet_property(bm):
+    """Return getter and setter functions for sheet coordinate access."""
+    # vertex layers for coordinate access
+    sheet_x = bm.verts.layers.float["Lightsheet X"]
+    sheet_y = bm.verts.layers.float["Lightsheet Y"]
+    sheet_z = bm.verts.layers.float["Lightsheet Z"]
+
+    # getter
+    def get_sheet(vert):
+        return Vector((vert[sheet_x], vert[sheet_y], vert[sheet_z]))
+
+    # setter
+    def set_sheet(vert, sheet_pos):
+        vert[sheet_x], vert[sheet_y], vert[sheet_z] = sheet_pos
+
+    return get_sheet, set_sheet
+
+
 def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     """Trace rays from lighsheet and return caustic coordinates in dict."""
     # hide lightsheets and caustics from raycast
@@ -319,9 +338,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     lightsheet_bm.from_mesh(lightsheet.data)
 
     # coordinates of source position on lighsheet
-    sheet_x = lightsheet_bm.verts.layers.float["Lightsheet X"]
-    sheet_y = lightsheet_bm.verts.layers.float["Lightsheet Y"]
-    sheet_z = lightsheet_bm.verts.layers.float["Lightsheet Z"]
+    get_sheet, _ = setup_sheet_property(lightsheet_bm)
 
     # make sure caches are clean
     trace.meshes_cache.clear()
@@ -332,11 +349,8 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     try:
         first_ray = setup_lightsheet_first_ray(lightsheet)
         for vert in lightsheet_bm.verts:
-            sx = vert[sheet_x]
-            sy = vert[sheet_y]
-            sz = vert[sheet_z]
-            sheet_pos = (sx, sy, sz)
-            trace.trace_scene_recursive(first_ray(sheet_pos), sheet_pos,
+            sheet_pos = get_sheet(vert)
+            trace.trace_scene_recursive(first_ray(sheet_pos), tuple(sheet_pos),
                                         depsgraph, max_bounces, traced)
     finally:
         # cleanup generated meshes and caches
@@ -477,15 +491,8 @@ def setup_caustic_bmesh(sheet_to_data):
     # create vertices and given positions and set sheet coordinates
     for sheet_pos, data in sheet_to_data.items():
         assert data is not None, sheet_pos
-
-        # create vertex
         vert = caustic_bm.verts.new(data.position)
-
-        # set sheet coordinates
-        sx, sy, sz = sheet_pos
-        vert[sheet_x] = sx
-        vert[sheet_y] = sy
-        vert[sheet_z] = sz
+        vert[sheet_x], vert[sheet_y], vert[sheet_z] = sheet_pos
 
     return caustic_bm
 
@@ -500,39 +507,27 @@ def fill_caustic_faces(caustic_bm, lightsheet):
     ls_bm.from_mesh(lightsheet.data)
 
     # get sheet coordinates from lightsheet
-    ls_sheet_x = ls_bm.verts.layers.float["Lightsheet X"]
-    ls_sheet_y = ls_bm.verts.layers.float["Lightsheet Y"]
-    ls_sheet_z = ls_bm.verts.layers.float["Lightsheet Z"]
-
-    # create vert -> sheet lookup table for faster access
-    ls_vert_to_sheet = dict()
-    for vert in ls_bm.verts:
-        sx = vert[ls_sheet_x]
-        sy = vert[ls_sheet_y]
-        sz = vert[ls_sheet_z]
-        ls_vert_to_sheet[vert] = (sx, sy, sz)
+    ls_get_sheet, _ = setup_sheet_property(ls_bm)
 
     # get sheet coordinates from caustic
-    caustic_sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
-    caustic_sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
-    caustic_sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
+    caustic_get_sheet, _ = setup_sheet_property(caustic_bm)
 
     # create sheet -> vert lookup table for faster access
+    # note that mathutils.Vector is mutable and must be converted to tuple
+    # before using it as a key for dict
     sheet_to_caustic_vert = dict()
     for vert in caustic_bm.verts:
-        sx = vert[caustic_sheet_x]
-        sy = vert[caustic_sheet_y]
-        sz = vert[caustic_sheet_z]
-        assert (sx, sy, sz) not in sheet_to_caustic_vert
-        sheet_to_caustic_vert[(sx, sy, sz)] = vert
+        sheet_key = tuple(caustic_get_sheet(vert))
+        assert sheet_key not in sheet_to_caustic_vert
+        sheet_to_caustic_vert[sheet_key] = vert
 
     # iterate over lighsheet faces and create corresponding caustic faces
     for ls_face in ls_bm.faces:
         # gather verts and sheet positions of caustic face
         caustic_verts = []
         for ls_vert in ls_face.verts:
-            sheet_pos = ls_vert_to_sheet[ls_vert]
-            vert = sheet_to_caustic_vert.get(sheet_pos)
+            sheet_key = tuple(ls_get_sheet(ls_vert))
+            vert = sheet_to_caustic_vert.get(sheet_key)
             if vert is not None:
                 caustic_verts.append(vert)
 
@@ -563,17 +558,7 @@ def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
         faces = caustic_bm.faces
 
     # sheet coordinate access
-    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
-    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
-    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
-
-    # create vert -> sheet lookup table for faster access
-    vert_to_sheet = dict()
-    for vert in caustic_bm.verts:
-        sx = vert[sheet_x]
-        sy = vert[sheet_y]
-        sz = vert[sheet_z]
-        vert_to_sheet[vert] = (sx, sy, sz)
+    get_sheet, _ = setup_sheet_property(caustic_bm)
 
     # iterate over caustic faces and calculate squeeze
     squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
@@ -584,8 +569,7 @@ def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
         source_triangle = []
         target_triangle = []
         for vert in face.verts:
-            sheet_pos = vert_to_sheet[vert]
-            source_triangle.append(matrix_sheet @ Vector(sheet_pos))
+            source_triangle.append(matrix_sheet @ get_sheet(vert))
             target_triangle.append(matrix_caustic @ vert.co)
 
         # set squeeze factor = ratio of source area to projected area
@@ -602,18 +586,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
         faces = caustic_bm.faces
 
     # sheet coordinate access
-    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
-    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
-    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
-
-    # create vert -> sheet lookup table for faster access
-    vert_to_sheet = dict()
-    for vert in caustic_bm.verts:
-        sx = vert[sheet_x]
-        sy = vert[sheet_y]
-        sz = vert[sheet_z]
-        sheet_pos = (sx, sy, sz)
-        vert_to_sheet[vert] = sheet_pos
+    get_sheet, _ = setup_sheet_property(caustic_bm)
 
     # sheet coordinates uv-layers
     uv_sheet_xy = caustic_bm.loops.layers.uv["Lightsheet XY"]
@@ -632,11 +605,11 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
         vert_normal_sum = Vector((0.0, 0.0, 0.0))
         for loop in face.loops:
             # get data for this vertex (if any)
-            sheet_pos = vert_to_sheet[loop.vert]
-            data = sheet_to_data.get(sheet_pos)
+            sheet_key = tuple(get_sheet(loop.vert))
+            data = sheet_to_data.get(sheet_key)
             if data is not None:
                 # sheet position to uv-coordinates
-                sx, sy, sz = sheet_pos
+                sx, sy, sz = sheet_key
                 loop[uv_sheet_xy].uv = (sx, sy)
                 loop[uv_sheet_xz].uv = (sx, sz)
 
@@ -680,17 +653,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     caustic_bm.from_mesh(caustic.data)
 
     # coordinates of source position on lighsheet
-    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
-    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
-    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
-
-    # create vert -> sheet lookup table for faster access
-    vert_to_sheet_vec = dict()
-    for vert in caustic_bm.verts:
-        sx = vert[sheet_x]
-        sy = vert[sheet_y]
-        sz = vert[sheet_z]
-        vert_to_sheet_vec[vert] = Vector((sx, sy, sz))
+    get_sheet, _ = setup_sheet_property(caustic_bm)
 
     # make sure caches are clean
     trace.meshes_cache.clear()
@@ -698,13 +661,13 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
 
     def calc_sheet_midpoint(edge):
         vert1, vert2 = edge.verts
-        sheet_pos1 = vert_to_sheet_vec[vert1]
-        sheet_pos2 = vert_to_sheet_vec[vert2]
+        sheet_pos1 = get_sheet(vert1)
+        sheet_pos2 = get_sheet(vert2)
         sheet_mid = (sheet_pos1 + sheet_pos2) / 2
-        return tuple(sheet_mid)
+        return sheet_mid
 
     # gather all edges that we have to split
-    refine_edges = dict()  # {edge: sheet pos of midpoint (tuple)}
+    refine_edges = dict()  # {edge: sheet pos of midpoint}
     sheet_to_data = dict()  # {sheet pos: target data (trace.CausticData)}
 
     # gather edges that exceed the tolerance
@@ -754,10 +717,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
         is_growable = True
         for vert in caustic_bm.verts:
             if vert.is_boundary and len(vert.link_edges) > 6:
-                sx = vert[sheet_x]
-                sy = vert[sheet_y]
-                sz = vert[sheet_z]
-                sheet_vec = Vector((sx, sy, sz))
+                sheet_vec = get_sheet(vert)
                 print(f"Sheet: {sheet_vec}, links: {len(vert.link_edges)}")
                 is_growable = False
 
@@ -781,24 +741,23 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     new_verts = split_verts + boundary_verts
     dead_verts = []
     for vert in new_verts:
-        # get sheet coords
-        sx = vert[sheet_x]
-        sy = vert[sheet_y]
-        sz = vert[sheet_z]
-        sheet_pos = (sx, sy, sz)
+        # get sheet coords and convert to key for dict (cannot use Vectors as
+        # keys because they are mutable)
+        sheet_pos = get_sheet(vert)
+        sheet_key = tuple(sheet_pos)
 
         # trace ray if necessary
-        if sheet_pos in sheet_to_data:
-            target_data = sheet_to_data[sheet_pos]
+        if sheet_key in sheet_to_data:
+            target_data = sheet_to_data[sheet_key]
         else:
             ray = first_ray(sheet_pos)
             target_data = trace.trace_along_chain(ray, depsgraph, chain)
-            sheet_to_data[sheet_pos] = target_data
+            sheet_to_data[sheet_key] = target_data
 
         # set coordinates or mark vertex for deletion
         if target_data is None:
             dead_verts.append(vert)
-            del sheet_to_data[sheet_pos]
+            del sheet_to_data[sheet_key]
         else:
             # set correct vertex coordinates
             vert.co = world_to_caustic @ target_data.position
@@ -847,22 +806,14 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
 def split_caustic_edges(caustic_bm, refine_edges):
     """Subdivide the given edges and return the new vertices."""
     # sheet coordinate access
-    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
-    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
-    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
-
-    def vert_to_sheet_vec(vert):
-        sx = vert[sheet_x]
-        sy = vert[sheet_y]
-        sz = vert[sheet_z]
-        return Vector((sx, sy, sz))
+    get_sheet, set_sheet = setup_sheet_property(caustic_bm)
 
     def calc_sheet_midpoint(edge):
         vert1, vert2 = edge.verts
-        sheet_pos1 = vert_to_sheet_vec(vert1)
-        sheet_pos2 = vert_to_sheet_vec(vert2)
+        sheet_pos1 = get_sheet(vert1)
+        sheet_pos2 = get_sheet(vert2)
         sheet_mid = (sheet_pos1 + sheet_pos2) / 2
-        return tuple(sheet_mid)
+        return sheet_mid
 
     # balance refinement: if two edges of a triangle will be refined, also
     # subdivide the other edge => after splitting we always get triangles
@@ -902,12 +853,7 @@ def split_caustic_edges(caustic_bm, refine_edges):
         vert = v1 if v1 in dirty_verts else v2
         assert vert in dirty_verts, sheet_pos
 
-        # set sheet coordinates
-        sx, sy, sz = sheet_pos
-        vert[sheet_x] = sx
-        vert[sheet_y] = sy
-        vert[sheet_z] = sz
-
+        set_sheet(vert, sheet_pos)
         split_verts.append(vert)
 
     # gather edges that were split
@@ -927,23 +873,7 @@ def grow_caustic_boundary(caustic_bm):
     # fan:      vertices around a central point (corner vertex at boundary)
 
     # sheet coordinate access
-    sheet_x = caustic_bm.verts.layers.float["Lightsheet X"]
-    sheet_y = caustic_bm.verts.layers.float["Lightsheet Y"]
-    sheet_z = caustic_bm.verts.layers.float["Lightsheet Z"]
-
-    # get (cached) sheet position as a mathutils.Vector
-    vert_to_sheet_vec = dict()
-
-    def get_sheet_vec(vert):
-        if vert in vert_to_sheet_vec:
-            return vert_to_sheet_vec[vert]
-
-        sx = vert[sheet_x]
-        sy = vert[sheet_y]
-        sz = vert[sheet_z]
-        sheet_vec = Vector((sx, sy, sz))
-        vert_to_sheet_vec[vert] = sheet_vec
-        return sheet_vec
+    get_sheet, set_sheet = setup_sheet_property(caustic_bm)
 
     # categorize connections of vertices at the boundary, note that adding new
     # faces will change .link_edges of boundary vertices, therefore we have to
@@ -967,12 +897,13 @@ def grow_caustic_boundary(caustic_bm):
         conn = (wire_edges, boundary_edges, inside_edges)
         original_boundary_connections[vert] = conn
 
-    # record new vertices as they are created and save sheet coordinates
-    outside_verts = dict()  # {outside vert (BMVert): sheet_vec (Vector)}
+    # record new vertices as they are created
+    outside_verts = []
 
     def create_vert(sheet_pos):
         new_vert = caustic_bm.verts.new()
-        outside_verts[new_vert] = sheet_pos
+        outside_verts.append(new_vert)
+        set_sheet(new_vert, sheet_pos)
         return new_vert
 
     # record new faces as they are created
@@ -1000,9 +931,9 @@ def grow_caustic_boundary(caustic_bm):
         vert_opposite = other_verts[0]
 
         # sheet coordinates of the three vertices
-        sheet_first = get_sheet_vec(vert_first)
-        sheet_second = get_sheet_vec(vert_second)
-        sheet_opposite = get_sheet_vec(vert_opposite)
+        sheet_first = get_sheet(vert_first)
+        sheet_second = get_sheet(vert_second)
+        sheet_opposite = get_sheet(vert_opposite)
 
         # mirror opposite vertex across the edge to get the outside vertex
         # want: sheet_midpoint == (sheet_opposite + sheet_outside) / 2
@@ -1020,7 +951,7 @@ def grow_caustic_boundary(caustic_bm):
     # outside edge at the base
     targetmap = dict()  # {vert to replace: replacement vert}
     for vert, conn in original_boundary_connections.items():
-        sheet_vert = get_sheet_vec(vert)
+        sheet_vert = get_sheet(vert)
         wire_edges, boundary_edges, inside_edges = conn
 
         # degree = number of neighbours
@@ -1037,7 +968,7 @@ def grow_caustic_boundary(caustic_bm):
             for edge in boundary_edges:
                 # get other vert in this edge and its sheet coordinates
                 vert_opposite = edge.other_vert(vert)
-                sheet_opposite = get_sheet_vec(vert_opposite)
+                sheet_opposite = get_sheet(vert_opposite)
 
                 # mirror across vertex
                 # want: sheet_vert == (sheet_opposite + sheet_outside) / 2
@@ -1066,7 +997,7 @@ def grow_caustic_boundary(caustic_bm):
             # get vertex of edge on the inside and its sheet coordinates
             inside_edge = inside_edges[0]
             vert_opposite = inside_edge.other_vert(vert)
-            sheet_opposite = get_sheet_vec(vert_opposite)
+            sheet_opposite = get_sheet(vert_opposite)
 
             # mirror across vertex
             # want: sheet_vert == (sheet_opposite + sheet_fan) / 2
@@ -1100,7 +1031,7 @@ def grow_caustic_boundary(caustic_bm):
                 outside_stuff = []
                 for edge in boundary_edges:
                     vert_outside = boundary_edge_to_outside_vert[edge]
-                    sheet_outside = outside_verts[vert_outside]
+                    sheet_outside = get_sheet(vert_outside)
                     outside_stuff.append((edge, vert_outside, sheet_outside))
 
                 # pair up the verts via distance in sheet
@@ -1119,7 +1050,7 @@ def grow_caustic_boundary(caustic_bm):
 
                     # merge vertices at median point
                     sheet_merge = (sheet_outside_a + sheet_outside_b) / 2
-                    outside_verts[vert_outside_a] = sheet_merge
+                    set_sheet(vert_outside_a, sheet_merge)
                     targetmap[vert_outside_b] = vert_outside_a
         elif degree == 5:
             # 120° outside angle => the boundary edges connected to this vertex
@@ -1129,12 +1060,12 @@ def grow_caustic_boundary(caustic_bm):
             # get verts to merge and their sheet coordinates
             vert_outside_a = boundary_edge_to_outside_vert[edge_a]
             vert_outside_b = boundary_edge_to_outside_vert[edge_b]
-            sheet_outside_a = outside_verts[vert_outside_a]
-            sheet_outside_b = outside_verts[vert_outside_b]
+            sheet_outside_a = get_sheet(vert_outside_a)
+            sheet_outside_b = get_sheet(vert_outside_b)
 
             # merge vertices at median point
             sheet_merge = (sheet_outside_a + sheet_outside_b) / 2
-            outside_verts[vert_outside_a] = sheet_merge
+            set_sheet(vert_outside_a, sheet_merge)
             targetmap[vert_outside_b] = vert_outside_a
         elif degree == 6:
             # 60° outside angle, one face of a complete hexagon is missing,
@@ -1150,9 +1081,9 @@ def grow_caustic_boundary(caustic_bm):
             # do the same for vert_b and vert_outside_a, note that when we
             # merge the vertices later one of the faces over edge_a and edge_b
             # will be deleted
-            outside_verts[vert_outside_a] = get_sheet_vec(vert_b)
+            set_sheet(vert_outside_a, get_sheet(vert_b))
             targetmap[vert_outside_a] = vert_b
-            outside_verts[vert_outside_b] = get_sheet_vec(vert_a)
+            set_sheet(vert_outside_b, get_sheet(vert_a))
             targetmap[vert_outside_b] = vert_a
         else:
             # degree < 2 or degree > 6 should not be possible, but it might
@@ -1162,14 +1093,7 @@ def grow_caustic_boundary(caustic_bm):
 
     # remove the doubled verts (will delete faces if case degree == 6 happend)
     bmesh.ops.weld_verts(caustic_bm, targetmap=targetmap)
-    outside_verts = {v: s for v, s in outside_verts.items() if v.is_valid}
-
-    # set sheet coordinates for new vertices
-    for vert, sheet_pos in outside_verts.items():
-        sx, sy, sz = sheet_pos
-        vert[sheet_x] = sx
-        vert[sheet_y] = sy
-        vert[sheet_z] = sz
+    outside_verts = [vert for vert in outside_verts if vert.is_valid]
 
     # update uv coordinates and vertex colors for new faces
     new_faces = [face for face in new_faces if face.is_valid]
@@ -1178,7 +1102,7 @@ def grow_caustic_boundary(caustic_bm):
                                         use_data=True)
     assert len(ret["faces_fail"]) == 0, ret["faces_fail"]
 
-    return list(outside_verts)
+    return outside_verts
 
 
 # -----------------------------------------------------------------------------
