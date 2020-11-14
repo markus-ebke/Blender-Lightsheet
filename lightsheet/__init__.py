@@ -38,13 +38,21 @@ bl_info = {
 if "bpy" in locals():
     import importlib
 
-    importlib.reload(operators)
+    importlib.reload(create_lightsheet)
+    importlib.reload(trace_lightsheet)
+    importlib.reload(refine_caustic)
+    importlib.reload(finalize_caustic)
     importlib.reload(properties)
     importlib.reload(ui)
 
     print("lighsheet reloaded")
 else:
-    from lightsheet import operators, properties, ui
+    from lightsheet import (create_lightsheet,
+                            trace_lightsheet,
+                            refine_caustic,
+                            finalize_caustic,
+                            properties,
+                            ui)
 
     print("lightsheet loaded")
 
@@ -56,10 +64,10 @@ from bpy.utils import register_class, unregister_class
 classes = (
     ui.LIGHTSHEET_PT_tools,
     ui.LIGHTSHEET_PT_caustic,
-    operators.LIGHTSHEET_OT_create_lightsheet,
-    operators.LIGHTSHEET_OT_trace_lightsheet,
-    operators.LIGHTSHEET_OT_refine_caustic,
-    operators.LIGHTSHEET_OT_finalize_caustic,
+    create_lightsheet.LIGHTSHEET_OT_create_lightsheet,
+    trace_lightsheet.LIGHTSHEET_OT_trace_lightsheet,
+    refine_caustic.LIGHTSHEET_OT_refine_caustic,
+    finalize_caustic.LIGHTSHEET_OT_finalize_caustic,
     properties.CausticPathLink,
     properties.CausticInfo,
 )
