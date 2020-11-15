@@ -137,8 +137,8 @@ def setup_lightsheet_first_ray(lightsheet):
 
 
 def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
-                        faces=None):
-    """Set squeeze (= source area / projected area) for the given faces."""
+                        verts=None):
+    """Calc squeeze (= source area / projected area) for the given verts."""
     # if no matrices given assume identity
     if matrix_sheet is None:
         matrix_sheet = Matrix()
@@ -146,30 +146,55 @@ def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
         matrix_caustic = Matrix()
 
     # if no faces given, iterate over every face
-    if faces is None:
-        faces = caustic_bm.faces
+    if verts is None:
+        verts = caustic_bm.verts
 
     # sheet coordinate access
     get_sheet, _ = setup_sheet_property(caustic_bm)
 
-    # iterate over caustic faces and calculate squeeze
+    # face source and target area cache
+    face_to_area = dict()
+
+    # the squeeze factor models how strongly a bundle of rays gets focused at
+    # the target, we estimate the true squeeze value at a given caustic vertex
+    # from the source and target area of a small region around the vertex
     squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
-    for face in faces:
-        assert len(face.verts) == 3, len(face.verts)
+    for vert in verts:
+        # imagine we merge the faces connected to vert into one bigger polygon
+        # with the vert somewhere in the middle, then the source and target
+        # area of this polygon is the sum of the source and target areas of
+        # the individual faces
+        source_area_sum = 0.0
+        target_area_sum = 0.0
+        for face in vert.link_faces:
+            if face in face_to_area:
+                # found face in cache
+                source_area, target_area = face_to_area[face]
+            else:
+                assert len(face.verts) == 3, face.verts[:]
 
-        # gather coordinates and sheet positions of caustic face
-        source_triangle = []
-        target_triangle = []
-        for vert in face.verts:
-            source_triangle.append(matrix_sheet @ get_sheet(vert))
-            target_triangle.append(matrix_caustic @ vert.co)
+                # gather coordinates and sheet positions of caustic face
+                source_triangle = []
+                target_triangle = []
+                for face_vert in face.verts:
+                    source_triangle.append(matrix_sheet @ get_sheet(face_vert))
+                    target_triangle.append(matrix_caustic @ face_vert.co)
 
-        # set squeeze factor = ratio of source area to projected area
-        source_area = area_tri(*source_triangle)
-        target_area = area_tri(*target_triangle)
-        squeeze = source_area / max(target_area, 1e-15)
-        for loop in face.loops:
-            loop[squeeze_layer].uv = (0, squeeze)
+                # compute area
+                source_area = area_tri(*source_triangle)
+                target_area = area_tri(*target_triangle)
+
+                # add to cache
+                face_to_area[face] = (source_area, target_area)
+
+            # accumulate areas
+            source_area_sum += source_area
+            target_area_sum += target_area
+
+        # squeeze factor = ratio of source area to projected area
+        squeeze = source_area_sum / max(target_area_sum, 1e-15)
+        for loop in vert.link_loops:
+            loop[squeeze_layer].uv[1] = squeeze
 
 
 def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):

@@ -18,13 +18,12 @@
 #  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 # ##### END GPL LICENSE BLOCK #####
-"""Smooth out and cleanup selected caustics.
+"""Cleanup selected caustics.
 
 LIGHTSHEET_OT_finalize_caustics: Operator for finalizing caustics
 
 Helper functions:
 - finalize_caustic
-- smooth_caustic_squeeze
 - cleanup_caustic
 """
 
@@ -114,7 +113,6 @@ def finalize_caustic(caustic, intensity_threshold):
     caustic_bm.from_mesh(caustic.data)
 
     # smooth out and cleanup
-    smooth_caustic_squeeze(caustic_bm)
     cleanup_caustic(caustic_bm, intensity_threshold)
     # TODO for cycles overlapping faces should be stacked in layers
 
@@ -124,51 +122,6 @@ def finalize_caustic(caustic, intensity_threshold):
 
     # mark as finalized
     caustic.caustic_info.finalized = True
-
-
-def smooth_caustic_squeeze(caustic_bm):
-    """Poke faces and smooth out caustic squeeze."""
-    squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
-
-    # poke every face (i.e. place a vertex in the middle)
-    result = bmesh.ops.poke(caustic_bm, faces=caustic_bm.faces,
-                            center_mode='MEAN')
-    poked_verts = set(result["verts"])
-
-    # interpolate squeeze for the original vertices
-    for vert in (ve for ve in caustic_bm.verts if ve not in poked_verts):
-        # find neighbouring poked vertices (= original faces)
-        poked_squeeze = dict()
-        for loop in vert.link_loops:
-            for other_vert in loop.face.verts:
-                if other_vert in poked_verts:
-                    squeeze = loop[squeeze_layer].uv[1]
-                    poked_squeeze[other_vert] = squeeze
-
-        # cannot process vertices that are not connected to a face, these
-        # vertices will be removed anyway
-        if len(poked_squeeze) == 0:
-            assert len(vert.link_faces) == 0
-            print("Found vertex belonging to unpoked face", vert.co)
-            break
-
-        # interpolate squeeze of original vertex from squeeze of neighbouring
-        # original faces, weight each face according to its distance (note that
-        # there is a correct solution that we could find via tracing rays that
-        # start very close to the source lightsheet vertex)
-        weightsum = 0.0
-        squeeze = 0.0
-        for other_vert in poked_squeeze:
-            dist = (other_vert.co - vert.co).length
-            assert dist > 0
-            weight = 1 / dist**2  # an arbitrary but sensible choice
-            weightsum += weight
-            squeeze += weight * poked_squeeze[other_vert]
-        squeeze /= weightsum
-
-        # set squeeze for this vertex
-        for loop in vert.link_loops:
-            loop[squeeze_layer].uv[1] = squeeze
 
 
 def cleanup_caustic(caustic_bm, intensity_threshold):

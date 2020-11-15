@@ -273,8 +273,12 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     trace.meshes_cache.clear()
     material.materials_cache.clear()
 
-    # gather the edges that we may split next and the faces where we changed at
-    # least one vertex (and now have to recalculate face data)
+    # gather the vertices whose neighbours have changed (to recalculate
+    # squeeze), the edges that we may split next and the faces where we
+    # changed at least one vertex (to recalculate face data)
+    dirty_verts = {neighbour for vert in new_verts
+                   for edge in vert.link_edges
+                   for neighbour in edge.verts}
     dirty_edges = set(split_edges)
     for vert in boundary_verts:
         if vert.is_valid:
@@ -285,7 +289,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     # recalculate squeeze and set face data for dirty faces
     utils.set_caustic_squeeze(caustic_bm, matrix_sheet=lightsheet.matrix_world,
                               matrix_caustic=caustic.matrix_world,
-                              faces=dirty_faces)
+                              verts=dirty_verts)
     utils.set_caustic_face_data(caustic_bm, sheet_to_data, faces=dirty_faces)
 
     # mark edges for next refinement step
