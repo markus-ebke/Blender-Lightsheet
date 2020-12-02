@@ -70,12 +70,13 @@ Link.__doc__ = """One link in the chain of interactions of a ray.
     """
 
 # organize caustic vertex info
-CausticData = namedtuple("CausticData", ["position", "color", "uv", "normal"])
-CausticData.__doc__ = """Data for a caustic vertex at the specified position.
+CausticData = namedtuple("CausticData", ["location", "color", "uv", "normal"])
+CausticData.__doc__ = """Data for a caustic vertex at the specified location.
 
-    Includes the position (mathutils.Vector) of the vertex, its color
-    (mathutils.Color), uv-coordinates (mathutils.Vector) from hit object
-    (may be None) and the normal (mathutils.Vector) of hit face.
+    Includes the global location (mathutils.Vector) of the final point, its
+    color (mathutils.Color), uv-coordinates (mathutils.Vector) from hit object
+    (may be None) and a normalized vector (mathutils.Vector) that points away
+    from the hit face (inside or outside depending on hit side).
     """
 
 # cache evaluated meshes for faster access, meshes_cache is a dict of form
@@ -124,10 +125,6 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
                 caustic_key = old_chain + (Link(obj, kind, None),)
                 sheet_to_data = traced[caustic_key]
 
-                # place caustic vertex in front of object
-                offset = copysign(1e-4, -ray_direction.dot(face.normal))
-                position = location + offset * face.normal
-
                 # calculate uv-coordinates if any
                 if obj.data.uv_layers.active:
                     location_obj = matrix.inverted() @ location
@@ -135,8 +132,14 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
                 else:
                     uv = None
 
+                # setup vector perpendicular to face (will be used to offset
+                # caustic), if we hit the backside use the reversed normal
+                normal = face.normal
+                if ray_direction.dot(normal) > 0:
+                    normal *= -1
+
                 # set data
-                vert_data = CausticData(position, color, uv, face.normal)
+                vert_data = CausticData(location, color, uv, normal)
                 sheet_to_data[sheet_pos] = vert_data
         elif len(old_chain) < max_bounces:
             assert new_direction is not None
@@ -247,16 +250,18 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         if kind == 'DIFFUSE':
             caustic_key = old_chain + (Link(obj, kind, None),)
 
-            # place caustic vertex in front of object
-            offset = copysign(1e-4, -ray_direction.dot(face.normal))
-            position = location + offset * face.normal
-
             # calculate uv-coordinates if any
             if obj.data.uv_layers.active:
                 location_obj = matrix.inverted() @ location
                 uv = calc_uv(obj, depsgraph, face_index, location_obj)
             else:
                 uv = None
+
+            # setup vector perpendicular to face (will be used to offset
+            # caustic), if we hit the backside use the reversed normal
+            normal = face.normal
+            if ray_direction.dot(normal) > 0:
+                normal *= -1
         else:
             assert new_direction is not None
             # move the starting point a safe distance away from the object
@@ -297,7 +302,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         assert link_followed.object == link_to_follow.object
         assert link_followed.kind == link_to_follow.kind
 
-    return CausticData(position, color, uv, face.normal)
+    return CausticData(location, color, uv, normal)
 
 
 def object_raycast(obj, ray_origin, ray_direction, depsgraph):

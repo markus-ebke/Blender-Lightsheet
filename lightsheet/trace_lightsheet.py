@@ -25,7 +25,6 @@ LIGHTSHEET_OT_trace_lighsheet: Operator for tracing lightsheet
 Helper functions:
 - verify_object_is_lighsheet
 - trace_lightsheet
-- chain_complexity
 - convert_caustics_to_objects
 - setup_caustic_bmesh
 - fill_caustic_faces
@@ -82,7 +81,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         tic = perf_counter()
         traced = trace_lightsheet(lightsheet, depsgraph, max_bounces)
         traced_sorted = sorted(
-            traced.items(), key=lambda item: chain_complexity(item[0]))
+            traced.items(), key=lambda item: utils.chain_complexity(item[0]))
         caustics = []
         for chain, sheet_to_data in traced_sorted:
             obj = convert_caustic_to_objects(lightsheet, chain, sheet_to_data)
@@ -160,7 +159,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     trace.meshes_cache.clear()
     material.materials_cache.clear()
 
-    # traced = {chain: {sheet_pos: CausticVert(location, color, uv, normal)}}
+    # traced = {chain: {sheet_pos: CausticData(location, color, uv, normal)}}
     traced = defaultdict(dict)
     try:
         first_ray = utils.setup_lightsheet_first_ray(lightsheet)
@@ -183,20 +182,13 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     return traced
 
 
-def chain_complexity(chain):
-    """Calculate a number representing the complexity of the given ray path."""
-    weights = {'DIFFUSE': 1, 'TRANSPARENT': 2, 'REFLECT': 3, 'REFRACT': 4}
-    cplx = 0
-    for link in chain:
-        # each link gets its own power of ten
-        cplx = 10 * cplx + weights[link.kind]
-    return cplx
-
-
 def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     """Convert caustic bmesh to blender object with filled in faces."""
+    # wrap caustic around object such that different caustics don't intersect
+    offset = 1e-4 * utils.chain_complexity(chain)
+
     # setup and fill caustic bmesh
-    caustic_bm = setup_caustic_bmesh(sheet_to_data)
+    caustic_bm = setup_caustic_bmesh(sheet_to_data, offset)
     fill_caustic_faces(caustic_bm, lightsheet)
     utils.bmesh_delete_loose(caustic_bm)
     utils.set_caustic_squeeze(caustic_bm, matrix_sheet=lightsheet.matrix_world)
@@ -249,8 +241,8 @@ def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     return caustic
 
 
-def setup_caustic_bmesh(sheet_to_data):
-    """Create empty bmesh with data layers used for caustics"""
+def setup_caustic_bmesh(sheet_to_data, offset):
+    """Create caustic bmesh with vertices and data layers."""
     caustic_bm = bmesh.new()
 
     # create vertex color layer for caustic tint
@@ -275,7 +267,8 @@ def setup_caustic_bmesh(sheet_to_data):
     # create vertices and given positions and set sheet coordinates
     for sheet_pos, data in sheet_to_data.items():
         assert data is not None, sheet_pos
-        vert = caustic_bm.verts.new(data.position)
+        position = data.location + offset * data.normal  # offset from object
+        vert = caustic_bm.verts.new(position)
         vert[sheet_x], vert[sheet_y], vert[sheet_z] = sheet_pos
 
     return caustic_bm

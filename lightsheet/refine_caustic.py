@@ -142,10 +142,11 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     assert lightsheet is not None
     first_ray = utils.setup_lightsheet_first_ray(lightsheet)
 
-    # convert caustic_info.path into chain for trace
+    # convert caustic_info.path into chain for trace and calculate offset
     chain = []
     for item in caustic_info.path:
         chain.append(trace.Link(item.object, item.kind, None))
+    offset = 1e-4 * utils.chain_complexity(chain)
 
     # convert caustic to bmesh
     caustic_bm = bmesh.new()
@@ -183,11 +184,15 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
             deleted_edges.add(edge)
             refine_edges[edge] = sheet_mid
         else:
-            # calc error and wether we should keep the edge
+            # midpoint of edge
             vert1, vert2 = edge.verts
             edge_mid = (vert1.co + vert2.co) / 2
-            mid_target = world_to_caustic @ target_data.position
 
+            # projected midpoint
+            position = target_data.location + offset * target_data.normal
+            mid_target = world_to_caustic @ position
+
+            # calc error and whether we should keep the edge
             rel_err = (edge_mid - mid_target).length / edge.calc_length()
             if rel_err >= relative_tolerance:
                 refine_edges[edge] = sheet_mid
@@ -259,7 +264,8 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
             del sheet_to_data[sheet_key]
         else:
             # set correct vertex coordinates
-            vert.co = world_to_caustic @ target_data.position
+            position = target_data.location + offset * target_data.normal
+            vert.co = world_to_caustic @ position
 
     # remove verts that have no target
     bmesh.ops.delete(caustic_bm, geom=dead_verts, context='VERTS')

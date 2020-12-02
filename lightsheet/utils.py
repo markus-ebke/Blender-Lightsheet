@@ -22,6 +22,7 @@
 
 - bmesh_delete_loose (bmesh reimplementation of bpy.ops.mesh.delete_loose)
 - verify_lightsheet_layers (used by create_lightsheet and trace_lightsheet)
+- chain_complexity (used by trace_lightsheet and refine_caustics)
 - setup_sheet_property (used by trace_lightsheet and refine_caustics)
 - setup_lightsheet_first_ray (used by trace_lightsheet and refine_caustics)
 - set_caustic_squeeze (used by trace_lightsheet and refine_caustics)
@@ -84,6 +85,15 @@ def verify_lightsheet_layers(bm):
             sx, sy, sz = vert_to_sheet[loop.vert]
             loop[uv_sheet_xy].uv = (sx, sy)
             loop[uv_sheet_xz].uv = (sx, sz)
+
+
+def chain_complexity(chain):
+    """Calculate a number representing the complexity of the given ray path."""
+    weights = {'DIFFUSE': 0, 'TRANSPARENT': 1, 'REFLECT': 2, 'REFRACT': 3}
+    cplx = 0
+    for link in chain:
+        cplx = 4 * cplx + weights[link.kind]
+    return cplx
 
 
 def setup_sheet_property(bm):
