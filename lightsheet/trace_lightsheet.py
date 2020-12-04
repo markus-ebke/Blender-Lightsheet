@@ -252,6 +252,9 @@ def setup_caustic_bmesh(sheet_to_data, offset):
     if all(data.uv is not None for data in sheet_to_data.values()):
         caustic_bm.loops.layers.uv.new("UVMap")
 
+    # create vertex layer for face index
+    face_index = caustic_bm.verts.layers.int.new("Face Index")
+
     # create uv-layer for squeeze = ratio of source area to projected area
     caustic_bm.loops.layers.uv.new("Caustic Squeeze")
 
@@ -267,8 +270,13 @@ def setup_caustic_bmesh(sheet_to_data, offset):
     # create vertices and given positions and set sheet coordinates
     for sheet_pos, data in sheet_to_data.items():
         assert data is not None, sheet_pos
-        position = data.location + offset * data.normal  # offset from object
+
+        # create caustic vertex offset from ohject
+        position = data.location + offset * data.normal
         vert = caustic_bm.verts.new(position)
+
+        # setup vertex data
+        vert[face_index] = data.face_index
         vert[sheet_x], vert[sheet_y], vert[sheet_z] = sheet_pos
 
     return caustic_bm

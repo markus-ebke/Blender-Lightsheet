@@ -70,13 +70,16 @@ Link.__doc__ = """One link in the chain of interactions of a ray.
     """
 
 # organize caustic vertex info
-CausticData = namedtuple("CausticData", ["location", "color", "uv", "normal"])
+CausticData = namedtuple("CausticData", ["location", "color", "uv", "normal",
+                                         "face_index"])
 CausticData.__doc__ = """Data for a caustic vertex at the specified location.
 
-    Includes the global location (mathutils.Vector) of the final point, its
-    color (mathutils.Color), uv-coordinates (mathutils.Vector) from hit object
-    (may be None) and a normalized vector (mathutils.Vector) that points away
-    from the hit face (inside or outside depending on hit side).
+    location (mathutils.Vector): location in scene space of final point
+    color (mathutils.Color): color of caustic at the final point
+    uv (mathutils.Vector): uv-coordinates on the hit object (may be None)
+    normal (mathutils.Vector): points away from the hit face (away from front
+        or backside of face depending on the side that was hit)
+    face_index: index of hit face from the mesh of the hit object
     """
 
 # cache evaluated meshes for faster access, meshes_cache is a dict of form
@@ -136,11 +139,11 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
                 # caustic), if we hit the backside use the reversed normal
                 normal = face.normal
                 if ray_direction.dot(normal) > 0:
-                    normal *= -1
+                    normal = -normal
 
                 # set data
-                vert_data = CausticData(location, color, uv, normal)
-                sheet_to_data[sheet_pos] = vert_data
+                sheet_to_data[sheet_pos] = CausticData(
+                    location, color, uv, normal, face_index)
         elif len(old_chain) < max_bounces:
             assert new_direction is not None
             # move the starting point a safe distance away from the object
@@ -261,7 +264,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
             # caustic), if we hit the backside use the reversed normal
             normal = face.normal
             if ray_direction.dot(normal) > 0:
-                normal *= -1
+                normal = -normal
         else:
             assert new_direction is not None
             # move the starting point a safe distance away from the object
@@ -302,7 +305,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         assert link_followed.object == link_to_follow.object
         assert link_followed.kind == link_to_follow.kind
 
-    return CausticData(location, color, uv, normal)
+    return CausticData(location, color, uv, normal, face_index)
 
 
 def object_raycast(obj, ray_origin, ray_direction, depsgraph):

@@ -43,12 +43,23 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     bl_label = "Refine Caustic"
     bl_options = {'REGISTER', 'UNDO'}
 
-    relative_tolerance_percent: bpy.props.FloatProperty(
-        name="Relative Error Tolerance",
-        description="Refine edge if error is >= tolerance (relative error = "
-        "distance(projected midpoint, midpoint of edge) / edge length)",
-        default=10.0, min=0.0, soft_max=100.0, precision=1,
-        subtype='PERCENTAGE',
+    adaptive_subdivision: bpy.props.BoolProperty(
+        name="Adaptive Subdivision",
+        description="Subdivide edges based on projection error",
+        default=True
+    )
+    error_threshold: bpy.props.FloatProperty(
+        name="Error Threshold",
+        description="Subdivide edge if distance between projected midpoint and"
+        " midpoint of edge if >= threshold * 1/2 length of edge",
+        default=0.1, min=0.0, soft_max=1.0, precision=2,
+    )
+    span_faces: bpy.props.BoolProperty(
+        name="Subdivide edges spanning faces",
+        description="Always subdivide edges whose vertices lie on different "
+        "faces of the underlying object (better for wrapping around curved "
+        "objects)",
+        default=True
     )
     grow_boundary: bpy.props.BoolProperty(
         name="Grow Boundary",
@@ -105,7 +116,12 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     def execute(self, context):
         # parameters for tracing
         depsgraph = context.view_layer.depsgraph
-        rel_tol = self.relative_tolerance_percent / 100
+
+        # set relative tolerance
+        if self.adaptive_subdivision:
+            relative_tolerance = self.error_threshold
+        else:
+            relative_tolerance = None
 
         num_verts_old, num_verts_now = 0, 0
         tic = perf_counter()
@@ -116,7 +132,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 
             # refine
             num_verts_old += len(obj.data.vertices)
-            refine_caustic(obj, depsgraph, rel_tol, self.grow_boundary)
+            refine_caustic(obj, depsgraph, relative_tolerance, self.span_faces,
+                           self.grow_boundary)
             num_verts_now += len(obj.data.vertices)
         toc = perf_counter()
 
@@ -131,7 +148,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by refine caustics operator
 # -----------------------------------------------------------------------------
-def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
+def refine_caustic(caustic, depsgraph, relative_tolerance=None,
+                   span_faces=True, grow_boundary=True):
     """Do one adaptive subdivision of caustic bmesh."""
     # world to caustic object coordinate transformation
     world_to_caustic = caustic.matrix_world.inverted()
@@ -152,6 +170,9 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     caustic_bm = bmesh.new()
     caustic_bm.from_mesh(caustic.data)
 
+    # setup face index from hit object
+    face_index = caustic_bm.verts.layers.int["Face Index"]
+
     # coordinates of source position on lighsheet
     get_sheet, _ = utils.setup_sheet_property(caustic_bm)
 
@@ -170,32 +191,41 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
     refine_edges = dict()  # {edge: sheet pos of midpoint}
     sheet_to_data = dict()  # {sheet pos: target data (trace.CausticData)}
 
-    # gather edges that exceed the tolerance
+    # gather edges that need to be split but skip non-seams
     deleted_edges = set()
     for edge in (ed for ed in caustic_bm.edges if ed.seam):
-        # calc midpoint and target data
+        # calc sheet midpoint, will be put into refine_edges
         sheet_mid = calc_sheet_midpoint(edge)
-        ray = first_ray(sheet_mid)
-        target_data = trace.trace_along_chain(ray, depsgraph, chain)
-        sheet_to_data[tuple(sheet_mid)] = target_data
 
-        if target_data is None:
-            # edge will be deleted, split it and see later what happens
-            deleted_edges.add(edge)
-            refine_edges[edge] = sheet_mid
-        else:
-            # midpoint of edge
+        if span_faces:
+            # split edge if it spans different faces
             vert1, vert2 = edge.verts
-            edge_mid = (vert1.co + vert2.co) / 2
-
-            # projected midpoint
-            position = target_data.location + offset * target_data.normal
-            mid_target = world_to_caustic @ position
-
-            # calc error and whether we should keep the edge
-            rel_err = (edge_mid - mid_target).length / edge.calc_length()
-            if rel_err >= relative_tolerance:
+            if vert1[face_index] != vert2[face_index]:
                 refine_edges[edge] = sheet_mid
+
+        if relative_tolerance is not None:
+            # split edge if projection is not straight enough
+            ray = first_ray(sheet_mid)
+            target_data = trace.trace_along_chain(ray, depsgraph, chain)
+            sheet_to_data[tuple(sheet_mid)] = target_data
+
+            if target_data is None:
+                # edge will be deleted, split it and see later what happens
+                deleted_edges.add(edge)
+                refine_edges[edge] = sheet_mid
+            else:
+                # midpoint of edge
+                vert1, vert2 = edge.verts
+                edge_mid = (vert1.co + vert2.co) / 2
+
+                # projected midpoint
+                position = target_data.location + offset * target_data.normal
+                mid_target = world_to_caustic @ position
+
+                # calc error and whether we should keep the edge
+                rel_err = (edge_mid - mid_target).length / edge.calc_length()
+                if rel_err >= relative_tolerance:
+                    refine_edges[edge] = sheet_mid
 
     if grow_boundary:
         # edges that belong to a face where at least one edge will be deleted
@@ -263,9 +293,10 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
             dead_verts.append(vert)
             del sheet_to_data[sheet_key]
         else:
-            # set correct vertex coordinates
+            # set correct vertex coordinates and face index
             position = target_data.location + offset * target_data.normal
             vert.co = world_to_caustic @ position
+            vert[face_index] = target_data.face_index
 
     # remove verts that have no target
     bmesh.ops.delete(caustic_bm, geom=dead_verts, context='VERTS')
@@ -286,7 +317,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary=True):
                    for edge in vert.link_edges
                    for neighbour in edge.verts}
     dirty_edges = set(split_edges)
-    for vert in boundary_verts:
+    for vert in new_verts:
         if vert.is_valid:
             for ed in vert.link_edges:
                 dirty_edges.add(ed)
