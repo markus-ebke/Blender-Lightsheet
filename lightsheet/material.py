@@ -503,7 +503,12 @@ def get_material_shader(mat):
 def get_caustic_material(light, parent_obj):
     """Get or setup caustic material for given light/parent combination."""
     # caustic material name
-    mat_name = f"Caustic of {light.name} on {parent_obj.name}"
+    parent_mat = parent_obj.active_material
+    if parent_mat is None:
+        parent_mat_name = "<Default Material>"
+    else:
+        parent_mat_name = parent_mat.name
+    mat_name = f"Caustic of {light.name} for {parent_mat_name}"
 
     # lookup if it already exists, if yes we are done
     mat = bpy.data.materials.get(mat_name)
@@ -522,7 +527,7 @@ def get_caustic_material(light, parent_obj):
     # for EEVEE
     mat.blend_method = 'BLEND'  # alpha blending
     mat.shadow_method = 'NONE'  # no shadows needed
-    add_nodes_for_eevee(mat.node_tree, light, parent_obj)
+    add_nodes_for_eevee(mat.node_tree, light, parent_obj.data.uv_layers.active)
 
     return mat
 
@@ -594,7 +599,7 @@ def add_nodes_for_cycles(node_tree, light):
     add_drivers_from_light(color, strength, light)
 
 
-def add_nodes_for_eevee(node_tree, light, parent_obj):
+def add_nodes_for_eevee(node_tree, light, uv_layer):
     # add nodes
     nodes = node_tree.nodes
     output = nodes.new(type='ShaderNodeOutputMaterial')
@@ -651,37 +656,34 @@ def add_nodes_for_eevee(node_tree, light, parent_obj):
     links.new(vertex_color.outputs[0], mix_rgb_light.inputs[2])
     links.new(uv_squeeze.outputs[0], sep_xyz.inputs[0])
 
-    # if uv map exists add default texture, else add default color
-    active_uv_layer = parent_obj.data.uv_layers.active
-    if active_uv_layer is not None:
-        # add nodes
-        texture = nodes.new(type='ShaderNodeTexChecker')
-        uv_map = nodes.new(type='ShaderNodeUVMap')
+    # add RGB color picker for default diffuse color
+    diffuse = nodes.new(type='ShaderNodeRGB')
+    diffuse.location = (-660, -200)
+    diffuse.outputs[0].default_value = (1.0, 0.0, 1.0, 1.0)
+    diffuse.label = "Original Diffuse Color"
+    diffuse.use_custom_color = True
+    diffuse.color = (1.0, 0.0, 0.0)
 
-        # change location
-        texture.location = (-660, -400)
-        uv_map.location = (-900, -400)
+    # add example texture and uvmap node for default diffuse color
+    texture = nodes.new(type='ShaderNodeTexChecker')
+    uv_map = nodes.new(type='ShaderNodeUVMap')
+    texture.location = (-660, -400)
+    uv_map.location = (-900, -400)
+    texture.inputs['Color1'].default_value = (1.0, 0.0, 1.0, 1.0)
+    texture.inputs['Color2'].default_value = (0.0, 1.0, 0.0, 1.0)
+    texture.inputs['Scale'].default_value = 42.0
+    texture.label = "Original Diffuse Texture"
+    texture.use_custom_color = True
+    texture.color = (1.0, 0.0, 0.0)
+    links.new(uv_map.outputs[0], texture.inputs[0])
 
-        # change settings
-        texture.inputs['Color1'].default_value = (1.0, 0.0, 1.0, 1.0)
-        texture.inputs['Color2'].default_value = (0.0, 1.0, 0.0, 1.0)
-        texture.inputs['Scale'].default_value = 42.0
-        texture.label = "Original Diffuse Color"
-        texture.use_custom_color = True
-        texture.color = (1.0, 0.0, 0.0)
-        uv_map.uv_map = active_uv_layer.name
-
-        # add links
-        links.new(texture.outputs[0], mix_rgb_diffuse.inputs[1])
-        links.new(uv_map.outputs[0], texture.inputs[0])
-    else:
-        diffuse = nodes.new(type='ShaderNodeRGB')
-        diffuse.location = (-660, -400)
-        diffuse.outputs[0].default_value = (1.0, 0.0, 1.0, 1.0)
-        diffuse.label = "Original Diffuse Color"
-        diffuse.use_custom_color = True
-        diffuse.color = (1.0, 0.0, 0.0)
+    # connect color of texture depending on whether a uv layer was given
+    if uv_layer is None:
         links.new(diffuse.outputs[0], mix_rgb_diffuse.inputs[1])
+        uv_map.uv_map = "UVMap"
+    else:
+        links.new(texture.outputs[0], mix_rgb_diffuse.inputs[1])
+        uv_map.uv_map = uv_layer.name
 
     # add driver
     add_drivers_from_light(color, strength, light)
