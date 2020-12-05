@@ -24,7 +24,8 @@ LIGHTSHEET_OT_finalize_caustics: Operator for finalizing caustics
 
 Helper functions:
 - finalize_caustic
-- cleanup_caustic
+- fadeout_caustic_boundary
+- remove_dim_faces
 - stack_overlapping_in_levels
 - collect_by_plane
 - crawl_faces
@@ -52,10 +53,20 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     bl_label = "Finalize Caustic"
     bl_options = {'REGISTER', 'UNDO'}
 
+    fade_boundary: bpy.props.BoolProperty(
+        name="Fade out boundary",
+        description="Hide boundary by making it transparent",
+        default=True
+    )
+    remove_dim_faces: bpy.props.BoolProperty(
+        name="Remove dim faces",
+        description="Remove faces that are less intense than the cutoff below",
+        default=True
+    )
     intensity_threshold: bpy.props.FloatProperty(
         name="Intensity Treshold",
-        description="Remove faces that are less intense than this cutoff "
-        "(caustic emission strength < intensity threshold * light strength)",
+        description="Remove face if for every vertex: caustic squeeze * tint "
+        "<= threshold (note: light strength is not included)",
         default=0.00001, min=0.0, precision=6, subtype='FACTOR'
     )
     delete_empty_caustics: bpy.props.BoolProperty(
@@ -96,7 +107,9 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
                 skipped += 1
                 continue
 
-            finalize_caustic(obj, self.intensity_threshold, self.fix_overlap)
+            min_dim = self.intensity_threshold if self.remove_dim_faces else 0
+            finalize_caustic(obj, self.fade_boundary, min_dim,
+                             self.fix_overlap)
             if self.delete_empty_caustics and len(obj.data.polygons) == 0:
                 # delete caustic object
                 bpy.data.objects.remove(obj)
@@ -123,14 +136,19 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
-def finalize_caustic(caustic, intensity_threshold, fix_overlap):
+def finalize_caustic(caustic, fade_boundary, intensity_threshold, fix_overlap):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
     caustic_bm.from_mesh(caustic.data)
 
+    # fade out boundary
+    if fade_boundary:
+        fadeout_caustic_boundary(caustic_bm)
+
     # smooth out and cleanup
-    cleanup_caustic(caustic_bm, intensity_threshold)
+    if intensity_threshold > 0:
+        remove_dim_faces(caustic_bm, intensity_threshold)
 
     # stack overlapping faces in layers
     if fix_overlap:
@@ -144,7 +162,15 @@ def finalize_caustic(caustic, intensity_threshold, fix_overlap):
     caustic.caustic_info.finalized = True
 
 
-def cleanup_caustic(caustic_bm, intensity_threshold):
+def fadeout_caustic_boundary(caustic_bm):
+    """Set vertex color to black for vertices at the boundary."""
+    color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
+    for vert in (v for v in caustic_bm.verts if v.is_boundary):
+        for loop in vert.link_loops:
+            loop[color_layer] = (0.0, 0.0, 0.0, 0.0)
+
+
+def remove_dim_faces(caustic_bm, intensity_threshold):
     """Remove invisible faces and cleanup resulting mesh."""
     squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
     color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
