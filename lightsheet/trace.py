@@ -239,17 +239,17 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         # determine surface interactions from material, but focus only on the
         # interaction that follows the path of the caustic
         surface_shader, volume_params = material.get_material_shader(mat)
-        found = False
+        found_intersection = None
         for interaction in surface_shader(ray_direction, normal):
             if interaction.kind == kind_to_follow:
-                found = True
+                found_intersection = interaction
                 break
 
         # if we cannot find this interaction, the caustic will be empty here
-        if not found:
+        if found_intersection is None:
             return None
 
-        kind, new_direction, tint = interaction
+        kind, new_direction, tint = found_intersection
         if kind == 'DIFFUSE':
             caustic_key = old_chain + (Link(obj, kind, None),)
 

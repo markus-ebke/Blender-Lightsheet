@@ -57,10 +57,10 @@ class LIGHTSHEET_PT_tools(Panel):
 
 def display_obj_info(obj, layout):
     """Draw info and stats about lightsheet related objects."""
-    layout.label(text=f"Active object: '{obj.name}'", icon='OBJECT_DATA')
+    layout.label(text="Info about the active object:", icon='INFO')
+    layout.label(text=f"{obj.name} ({obj.type})", icon='OBJECT_DATA')
     if obj.type == 'LIGHT':
         # object is light, does it have a lightsheet?
-        layout.label(text="Object is light source", icon='LIGHT')
         has_lightsheet = any("lightsheet" in child.name.lower()
                              for child in obj.children)
         if has_lightsheet:
@@ -68,7 +68,7 @@ def display_obj_info(obj, layout):
         else:
             layout.label(text="Light has no lightsheet", icon='CHECKBOX_DEHLT')
     elif obj.type == 'MESH':
-        # object is mesh, is it a lightsheet or caustic?
+        # object is mesh, is it a lightsheet, caustic or parent of caustic?
         if obj.parent is not None and obj.parent.type == 'LIGHT':
             # object is or can be lightsheet
             verb = "is" if "lightsheet" in obj.name.lower() else "can be"
@@ -76,19 +76,15 @@ def display_obj_info(obj, layout):
                          icon='LIGHTPROBE_PLANAR')
         elif obj.caustic_info.path:
             # object is caustic
-            if not obj.caustic_info.finalized:
-                txt = "Object is caustic"
-            else:
-                txt = "Object is caustic (finalized)"
-            layout.label(text=txt, icon='SHADERFX')
+            state = "(finalized)" if obj.caustic_info.finalized else ""
+            layout.label(text=f"Object is caustic {state}", icon='SHADERFX')
+        elif any(chd.caustic_info.path for chd in obj.children):
+            # object is parent of caustics
+            layout.label(text="Object is parent for caustics",
+                         icon='CON_CHILDOF')
         else:
-            layout.label(text="Object is unrelated mesh", icon='MESH_GRID')
-
-        # mesh stats
-        num_verts = len(obj.data.vertices)
-        num_faces = len(obj.data.polygons)
-        stats = f"Verts: {num_verts:,}, Faces: {num_faces:,}"
-        layout.label(text=stats, icon='MESH_DATA')
+            # object is unrelated
+            layout.label(text="Object is unrelated", icon='X')
 
 
 class LIGHTSHEET_PT_caustic(Panel):
@@ -107,20 +103,27 @@ class LIGHTSHEET_PT_caustic(Panel):
     def draw(self, context):
         layout = self.layout
         col = layout.column()
-        caustic_info = context.object.caustic_info
+
+        obj = context.object
 
         # lightsheet info
-        lightsheet = caustic_info.lightsheet
+        lightsheet = obj.caustic_info.lightsheet
         if lightsheet is not None:
             col.label(text=f"Source: {lightsheet.name}")
         else:
             col.label(text="Lightsheet not found", icon='ORPHAN_DATA')
 
         # list contents of caustic_info.path
-        for link in caustic_info.path:
+        for link in obj.caustic_info.path:
             interaction = link.kind.capitalize()
             if link.object:
                 obj_name = link.object.name
             else:
                 obj_name = "<object not found>"
             col.label(text=f"{interaction}: {obj_name}")
+
+        # mesh stats
+        data = obj.data
+        layout.label(text=f"Verts: {len(data.vertices):,}", icon='VERTEXSEL')
+        layout.label(text=f"Edges: {len(data.edges):,}", icon='EDGESEL')
+        layout.label(text=f"Faces: {len(data.polygons):,}", icon='FACESEL')

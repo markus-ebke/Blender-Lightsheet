@@ -63,7 +63,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     )
     grow_boundary: bpy.props.BoolProperty(
         name="Grow Boundary",
-        description="Expand the boundary",
+        description="Always subdivide edges on the boundary, then add a strip "
+        "of triangles on the outside",
         default=True
     )
 
@@ -138,8 +139,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         toc = perf_counter()
 
         # report statistics
-        v_stats = "Added {:,} verts".format(num_verts_now-num_verts_old)
-        t_stats = "{:.3f}s".format(toc-tic)
+        v_stats = f"Added {num_verts_now-num_verts_old:,} verts"
+        t_stats = f"{toc-tic:.3f}s"
         self.report({"INFO"}, f"{v_stats} in {t_stats}")
 
         return {"FINISHED"}

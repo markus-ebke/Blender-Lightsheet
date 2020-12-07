@@ -99,11 +99,17 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         else:
             # lightsheet that surrounds the point light
             bm = create_bmesh_sphere(self.resolution)
+        lightsheet = convert_bmesh_to_lightsheet(bm, light)
         toc = perf_counter()
 
-        # convert to lightsheet object and add to scene
-        lightsheet = convert_bmesh_to_lightsheet(bm, light)
-        coll = context.scene.collection
+        # get or setup collection for lightsheets and add lightsheet object
+        coll_name = f"Lightsheets in {context.scene.name}"
+        coll = context.scene.collection.children.get(coll_name)
+        if coll is None:
+            coll = bpy.data.collections.get(coll_name)
+            if coll is None:
+                coll = bpy.data.collections.new(coll_name)
+            context.scene.collection.children.link(coll)
         coll.objects.link(lightsheet)
 
         # report statistics

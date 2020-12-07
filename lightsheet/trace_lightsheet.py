@@ -103,9 +103,8 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
             context.scene.collection.children.link(coll)
 
         # get material and add caustic object to caustic collection
-        light = lightsheet.parent
         for obj in caustics:
-            mat = material.get_caustic_material(light, obj.parent)
+            mat = material.get_caustic_material(lightsheet.parent, obj.parent)
             obj.data.materials.append(mat)
             coll.objects.link(obj)
 

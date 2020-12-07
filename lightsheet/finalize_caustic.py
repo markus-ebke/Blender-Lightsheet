@@ -67,7 +67,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         name="Intensity Treshold",
         description="Remove face if for every vertex: caustic squeeze * tint "
         "<= threshold (note: light strength is not included)",
-        default=0.00001, min=0.0, precision=6, subtype='FACTOR'
+        default=0.0001, min=0.0, precision=5, subtype='FACTOR'
     )
     delete_empty_caustics: bpy.props.BoolProperty(
         name="Delete empty caustics",
