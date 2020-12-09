@@ -207,10 +207,10 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
         if relative_tolerance is not None:
             # split edge if projection is not straight enough
             ray = first_ray(sheet_mid)
-            target_data = trace.trace_along_chain(ray, depsgraph, chain)
-            sheet_to_data[tuple(sheet_mid)] = target_data
+            cdata, _ = trace.trace_along_chain(ray, depsgraph, chain)
+            sheet_to_data[tuple(sheet_mid)] = cdata
 
-            if target_data is None:
+            if cdata is None:
                 # edge will be deleted, split it and see later what happens
                 deleted_edges.add(edge)
                 refine_edges[edge] = sheet_mid
@@ -220,7 +220,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
                 edge_mid = (vert1.co + vert2.co) / 2
 
                 # projected midpoint
-                position = target_data.location + offset * target_data.normal
+                position = cdata.location + offset * cdata.normal
                 mid_target = world_to_caustic @ position
 
                 # calc error and whether we should keep the edge
@@ -283,21 +283,21 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
 
         # trace ray if necessary
         if sheet_key in sheet_to_data:
-            target_data = sheet_to_data[sheet_key]
+            cdata = sheet_to_data[sheet_key]
         else:
             ray = first_ray(sheet_pos)
-            target_data = trace.trace_along_chain(ray, depsgraph, chain)
-            sheet_to_data[sheet_key] = target_data
+            cdata, _ = trace.trace_along_chain(ray, depsgraph, chain)
+            sheet_to_data[sheet_key] = cdata
 
         # set coordinates or mark vertex for deletion
-        if target_data is None:
+        if cdata is None:
             dead_verts.append(vert)
             del sheet_to_data[sheet_key]
         else:
             # set correct vertex coordinates and face index
-            position = target_data.location + offset * target_data.normal
+            position = cdata.location + offset * cdata.normal
             vert.co = world_to_caustic @ position
-            vert[face_index] = target_data.face_index
+            vert[face_index] = cdata.face_index
 
     # remove verts that have no target
     bmesh.ops.delete(caustic_bm, geom=dead_verts, context='VERTS')

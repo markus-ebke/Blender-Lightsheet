@@ -142,8 +142,8 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
                     normal = -normal
 
                 # set data
-                sheet_to_data[sheet_pos] = CausticData(
-                    location, color, uv, normal, face_index)
+                cdata = CausticData(location, color, uv, normal, face_index)
+                sheet_to_data[sheet_pos] = cdata
         elif len(old_chain) < max_bounces:
             assert new_direction is not None
             # move the starting point a safe distance away from the object
@@ -215,15 +215,19 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
     assert all(link.kind != 'DIFFUSE' for link in chain_to_follow[:-1])
     assert chain_to_follow[-1].kind == 'DIFFUSE'
 
+    # record intermediate locations for visualizing the raypath
+    trail = [ray.origin]
+
     # trace along the given chain of interactions
     for obj, kind_to_follow, _ in chain_to_follow:
         ray_origin, ray_direction, color, old_chain = ray
         location, normal, face_index, matrix = object_raycast(
             obj, ray_origin, ray_direction, depsgraph)
+        trail.append(location)
 
         # if we missed the object, the caustic will be empty at this position
         if location is None:
-            return None
+            return (None, trail)
 
         # get hit face
         obj_mesh = get_eval_mesh(obj, depsgraph)
@@ -247,7 +251,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
 
         # if we cannot find this interaction, the caustic will be empty here
         if found_intersection is None:
-            return None
+            return (None, trail)
 
         kind, new_direction, tint = found_intersection
         if kind == 'DIFFUSE':
@@ -305,7 +309,8 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         assert link_followed.object == link_to_follow.object
         assert link_followed.kind == link_to_follow.kind
 
-    return CausticData(location, color, uv, normal, face_index)
+    cdata = CausticData(location, color, uv, normal, face_index)
+    return (cdata, trail)
 
 
 def object_raycast(obj, ray_origin, ray_direction, depsgraph):

@@ -57,7 +57,7 @@ class LIGHTSHEET_PT_tools(Panel):
 
 def display_obj_info(obj, layout):
     """Draw info and stats about lightsheet related objects."""
-    layout.label(text="Info about the active object:", icon='INFO')
+    layout.label(text="Active object:")
     layout.label(text=f"{obj.name} ({obj.type})", icon='OBJECT_DATA')
     if obj.type == 'LIGHT':
         # object is light, does it have a lightsheet?
@@ -82,6 +82,10 @@ def display_obj_info(obj, layout):
             # object is parent of caustics
             layout.label(text="Object is parent for caustics",
                          icon='CON_CHILDOF')
+        elif obj.parent is not None and obj.parent.caustic_info.path:
+            # object is probably a visualized raypath
+            layout.label(text="Object is raypath visualization",
+                         icon='CURVE_PATH')
         else:
             # object is unrelated
             layout.label(text="Object is unrelated", icon='X')
@@ -89,7 +93,7 @@ def display_obj_info(obj, layout):
 
 class LIGHTSHEET_PT_caustic(Panel):
     """Create a caustic info panel in the 3d-view sidebar."""
-    bl_label = "Caustic Raypath"
+    bl_label = "Caustic Info"
     bl_context = 'objectmode'
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -102,28 +106,73 @@ class LIGHTSHEET_PT_caustic(Panel):
 
     def draw(self, context):
         layout = self.layout
-        col = layout.column()
+        caustic = context.object
 
-        obj = context.object
+        # display caustic info and raypath operator
+        display_caustic_raypath(caustic.caustic_info, layout.column())
+        layout.operator("lightsheet.visualize", icon='CURVE_PATH')
 
-        # lightsheet info
-        lightsheet = obj.caustic_info.lightsheet
-        if lightsheet is not None:
-            col.label(text=f"Source: {lightsheet.name}")
+        box = layout.box()
+
+        # display mesh stats
+        data = caustic.data
+        box.label(text="Info about mesh:")
+        box.label(text=f"Verts: {len(data.vertices):,}", icon='VERTEXSEL')
+        box.label(text=f"Edges: {len(data.edges):,}", icon='EDGESEL')
+        box.label(text=f"Faces: {len(data.polygons):,}", icon='FACESEL')
+
+
+def display_caustic_raypath(caustic_info, layout):
+    """Display info about caustic raypath."""
+    # lightsheet info
+    lightsheet = caustic_info.lightsheet
+    if lightsheet is not None:
+        layout.label(text=f"Source: {lightsheet.name}")
+    else:
+        layout.label(text="Lightsheet not found", icon='ORPHAN_DATA')
+
+    # list contents of caustic_info.path
+    for link in caustic_info.path:
+        interaction = link.kind.capitalize()
+        if interaction == "Diffuse":
+            interaction = "Target"
+
+        if link.object:
+            obj_name = link.object.name
         else:
-            col.label(text="Lightsheet not found", icon='ORPHAN_DATA')
+            obj_name = "<object not found>"
+        layout.label(text=f"{interaction}: {obj_name}")
 
-        # list contents of caustic_info.path
-        for link in obj.caustic_info.path:
-            interaction = link.kind.capitalize()
-            if link.object:
-                obj_name = link.object.name
-            else:
-                obj_name = "<object not found>"
-            col.label(text=f"{interaction}: {obj_name}")
 
-        # mesh stats
-        data = obj.data
-        layout.label(text=f"Verts: {len(data.vertices):,}", icon='VERTEXSEL')
-        layout.label(text=f"Edges: {len(data.edges):,}", icon='EDGESEL')
-        layout.label(text=f"Faces: {len(data.polygons):,}", icon='FACESEL')
+class LIGHTSHEET_PT_raypath(Panel):
+    """Create a raypath info panel in the 3d-view sidebar."""
+    bl_label = "Raypath Visualization"
+    bl_context = 'objectmode'
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Lightsheet"
+
+    @classmethod
+    def poll(cls, context):
+        # show panel only for caustics
+        obj = context.object
+        if obj is not None and obj.parent is not None:
+            return bool(obj.parent.caustic_info.path)
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.object
+        caustic = obj.parent
+        assert caustic is not None
+
+        # display caustic info
+        display_caustic_raypath(caustic.caustic_info, layout.column())
+
+        box = layout.box()
+
+        # display mesh stats
+        verts_per_ray = len(caustic.caustic_info.path) + 1
+        num_rays = len(obj.data.vertices) // verts_per_ray
+        box.label(text="Info about mesh:")
+        box.label(text=f"Rays: {num_rays:,}", icon='CURVE_PATH')
+        box.label(text=f"Verts per ray: {verts_per_ray}", icon='VERTEXSEL')

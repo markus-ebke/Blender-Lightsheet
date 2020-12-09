@@ -42,6 +42,7 @@ if "bpy" in locals():
     importlib.reload(trace_lightsheet)
     importlib.reload(refine_caustic)
     importlib.reload(finalize_caustic)
+    importlib.reload(visualize_raypath)
     importlib.reload(properties)
     importlib.reload(ui)
 
@@ -51,6 +52,7 @@ else:
                             trace_lightsheet,
                             refine_caustic,
                             finalize_caustic,
+                            visualize_raypath,
                             properties,
                             ui)
 
@@ -64,10 +66,12 @@ from bpy.utils import register_class, unregister_class
 classes = (
     ui.LIGHTSHEET_PT_tools,
     ui.LIGHTSHEET_PT_caustic,
+    ui.LIGHTSHEET_PT_raypath,
     create_lightsheet.LIGHTSHEET_OT_create_lightsheet,
     trace_lightsheet.LIGHTSHEET_OT_trace_lightsheet,
     refine_caustic.LIGHTSHEET_OT_refine_caustic,
     finalize_caustic.LIGHTSHEET_OT_finalize_caustic,
+    visualize_raypath.LIGHTSHEET_OT_visualize_raypath,
     properties.CausticPathLink,
     properties.CausticInfo,
 )
