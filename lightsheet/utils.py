@@ -89,10 +89,17 @@ def verify_lightsheet_layers(bm):
 
 def chain_complexity(chain):
     """Calculate a number representing the complexity of the given ray path."""
-    weights = {'DIFFUSE': 0, 'TRANSPARENT': 1, 'REFLECT': 2, 'REFRACT': 3}
+    weights = {'TRANSPARENT': 0, 'REFLECT': 1, 'REFRACT': 2}
+
+    # check that only the last link is diffuse
+    assert chain[-1].kind == 'DIFFUSE', chain[-1]
+    assert all(link.kind in weights for link in chain[:-1])
+
+    # complexity = kind of interactions in base 3
     cplx = 0
-    for link in chain:
-        cplx = 4 * cplx + weights[link.kind]
+    for link in chain[:-1]:
+        cplx = 3 * cplx + weights[link.kind]
+
     return cplx
 
 

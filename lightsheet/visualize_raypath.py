@@ -104,11 +104,10 @@ def gather_trails(caustic, depsgraph):
     assert lightsheet is not None
     first_ray = utils.setup_lightsheet_first_ray(lightsheet)
 
-    # convert caustic_info.path into chain for trace and calculate offset
+    # chain for retracing
     chain = []
     for item in caustic.caustic_info.path:
         chain.append(trace.Link(item.object, item.kind, None))
-    offset = 1e-4 * utils.chain_complexity(chain)
 
     # convert caustic to bmesh
     caustic_bm = bmesh.new()
@@ -133,9 +132,8 @@ def gather_trails(caustic, depsgraph):
             msg = "Existing caustic vertex cannot be projected?!"
             raise RuntimeError(msg)
 
-        # add offset for vertex coordinate at the end to make the trail
-        # flush with the caustic
-        position = cdata.location + offset * cdata.normal
+        # for last vertex add offset so that trail is flush with the caustic
+        position = cdata.location + 1e-4 * cdata.normal
         trail[-1] = position
         trails.append(trail)
 

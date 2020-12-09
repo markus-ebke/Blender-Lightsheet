@@ -44,7 +44,7 @@ import bpy
 from bpy.types import Operator
 from mathutils import Matrix
 
-from lightsheet import utils
+from lightsheet import trace, utils
 
 
 class LIGHTSHEET_OT_finalize_caustic(Operator):
@@ -152,7 +152,14 @@ def finalize_caustic(caustic, fade_boundary, intensity_threshold, fix_overlap):
 
     # stack overlapping faces in layers
     if fix_overlap:
-        stack_overlapping_in_levels(caustic_bm, caustic.matrix_world)
+        # derive offset from complexity of raypath chain so that different
+        # caustics are also separated
+        chain = []
+        for item in caustic.caustic_info.path:
+            chain.append(trace.Link(item.object, item.kind, None))
+        offset = 1e-4 * utils.chain_complexity(chain)
+
+        stack_overlapping_in_levels(caustic_bm, caustic.matrix_world, offset)
 
     # convert bmesh back to object
     caustic_bm.to_mesh(caustic.data)
@@ -195,10 +202,10 @@ def remove_dim_faces(caustic_bm, intensity_threshold):
     utils.bmesh_delete_loose(caustic_bm)
 
 
-def stack_overlapping_in_levels(bm, matrix_world, stack_margin=1e-4):
+def stack_overlapping_in_levels(bm, matrix_world, offset, separation=1e-4):
     """Stack intersecting faces such that they don't overlap anymore."""
     # find affine planes and the faces they contain
-    affine_planes = collect_by_plane(bm, safe_distance=100*stack_margin)
+    affine_planes = collect_by_plane(bm, safe_distance=100*separation)
 
     # assign to each face a level
     level_to_faces = defaultdict(list)
@@ -209,10 +216,9 @@ def stack_overlapping_in_levels(bm, matrix_world, stack_margin=1e-4):
                     reverse=True)
 
         for level, indices in enumerate(groups):
-            if level > 0:  # will only modify faces above level zero
-                level_to_faces[level].extend(faces[idx] for idx in indices)
+            level_to_faces[level].extend(faces[idx] for idx in indices)
 
-    # split off and elevate faces with level > 0
+    # split off and elevate faces
     world_to_local = matrix_world.inverted()
     for level, faces in level_to_faces.items():
         geom = bmesh.ops.split(bm, geom=faces)["geom"]
@@ -228,7 +234,7 @@ def stack_overlapping_in_levels(bm, matrix_world, stack_margin=1e-4):
             world_normal.normalize()
 
             # displace in world coordinates and transform to local coordinates
-            displacement = level * stack_margin * world_normal
+            displacement = (offset + level * separation) * world_normal
             vert.co = world_to_local @ (location + displacement)
 
 

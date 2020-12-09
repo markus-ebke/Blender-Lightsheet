@@ -161,11 +161,10 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
     assert lightsheet is not None
     first_ray = utils.setup_lightsheet_first_ray(lightsheet)
 
-    # convert caustic_info.path into chain for trace and calculate offset
+    # chain for tracing
     chain = []
     for item in caustic_info.path:
         chain.append(trace.Link(item.object, item.kind, None))
-    offset = 1e-4 * utils.chain_complexity(chain)
 
     # convert caustic to bmesh
     caustic_bm = bmesh.new()
@@ -219,8 +218,8 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
                 vert1, vert2 = edge.verts
                 edge_mid = (vert1.co + vert2.co) / 2
 
-                # projected midpoint
-                position = cdata.location + offset * cdata.normal
+                # projected midpoint with offset
+                position = cdata.location + 1e-4 * cdata.normal
                 mid_target = world_to_caustic @ position
 
                 # calc error and whether we should keep the edge
@@ -295,7 +294,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
             del sheet_to_data[sheet_key]
         else:
             # set correct vertex coordinates and face index
-            position = cdata.location + offset * cdata.normal
+            position = cdata.location + 1e-4 * cdata.normal
             vert.co = world_to_caustic @ position
             vert[face_index] = cdata.face_index
 

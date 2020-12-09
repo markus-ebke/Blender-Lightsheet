@@ -183,11 +183,8 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
 
 def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     """Convert caustic bmesh to blender object with filled in faces."""
-    # wrap caustic around object such that different caustics don't intersect
-    offset = 1e-4 * utils.chain_complexity(chain)
-
     # setup and fill caustic bmesh
-    caustic_bm = setup_caustic_bmesh(sheet_to_data, offset)
+    caustic_bm = setup_caustic_bmesh(sheet_to_data)
     fill_caustic_faces(caustic_bm, lightsheet)
     utils.bmesh_delete_loose(caustic_bm)
     utils.set_caustic_squeeze(caustic_bm, matrix_sheet=lightsheet.matrix_world)
@@ -240,7 +237,7 @@ def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     return caustic
 
 
-def setup_caustic_bmesh(sheet_to_data, offset):
+def setup_caustic_bmesh(sheet_to_data):
     """Create caustic bmesh with vertices and data layers."""
     caustic_bm = bmesh.new()
 
@@ -270,8 +267,8 @@ def setup_caustic_bmesh(sheet_to_data, offset):
     for sheet_pos, data in sheet_to_data.items():
         assert data is not None, sheet_pos
 
-        # create caustic vertex offset from ohject
-        position = data.location + offset * data.normal
+        # create caustic vertex, offset so that caustic wraps around object
+        position = data.location + 1e-4 * data.normal
         vert = caustic_bm.verts.new(position)
 
         # setup vertex data
