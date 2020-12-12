@@ -259,19 +259,22 @@ def collect_by_plane(bm, safe_distance=1e-4):
         # check only planes of the immediate neighbours, we may miss a valid
         # plane but this is a lot faster if we have many planes (like when the
         # caustic wraps around a curved object)
-        check_planes = []
+        check_planes_indices = set()
         for vert in face.verts:
             for other_face in vert.link_faces:
-                guess_plane = face_to_plane.get(other_face, None)
-                if guess_plane is not None and guess_plane not in check_planes:
-                    check_planes.append(guess_plane)
+                if other_face in face_to_plane:
+                    guess_plane_idx = face_to_plane[other_face]
+                    if guess_plane_idx not in check_planes_indices:
+                        check_planes_indices.add(guess_plane_idx)
 
         # if we could not guess any planes, check all of them
-        if not check_planes:
-            check_planes = affine_planes
+        if not check_planes_indices:
+            check_planes_indices = range(len(affine_planes))
 
         # check if face is part of plane and if not then create one for it
-        for projector, faces, shapes in check_planes:
+        for plane_idx in check_planes_indices:
+            projector, faces, shapes = affine_planes[plane_idx]
+
             # project face onto plane
             shape = []
             for vert in face_verts:
@@ -286,7 +289,7 @@ def collect_by_plane(bm, safe_distance=1e-4):
                 assert len(faces) == len(shapes)
                 faces.append(face)
                 shapes.append(shape)
-                face_to_plane[face] = projector, faces, shapes
+                face_to_plane[face] = plane_idx
 
                 # break loop over affine planes, skip else clause below
                 break
@@ -322,7 +325,7 @@ def collect_by_plane(bm, safe_distance=1e-4):
 
             # add new affine plane
             affine_planes.append((projector, [face], [shape]))
-            face_to_plane[face] = affine_planes[-1]
+            face_to_plane[face] = len(affine_planes) - 1
 
     return affine_planes
 
