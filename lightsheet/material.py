@@ -27,10 +27,11 @@ A caustic material is created via get_caustic_material, it will add nodes for
 Cycles, EEVEE and add drivers for light strength and color.
 
 Note that after tracing you should cleanup the cached material shaders via
-material.materials_cache.clear()
+material.cache_clear()
 """
 
 from collections import namedtuple
+from functools import lru_cache
 from math import sqrt
 
 import bpy
@@ -49,10 +50,6 @@ Interaction.__doc__ = """Type of ray after surface interaction.
 
     If kind == 'DIFFUSE' then outgoing and tint will not be used and are None.
     """
-
-# cache material to shader mapping for faster access, materials_cache is a dict
-# of form {material: (surface shader function, volume parameters tuple)}
-materials_cache = dict()
 
 
 # -----------------------------------------------------------------------------
@@ -412,6 +409,7 @@ setup_node_interactions = {
 
 
 # main function to process materials ------------------------------------------
+@lru_cache(maxsize=None)
 def get_material_shader(mat):
     """Returns a function and a tuple that model the material interaction.
 
@@ -421,11 +419,6 @@ def get_material_shader(mat):
     for volume absorption. If not None (i.e. there is absorption) then it is of
     the form (color: mathutils.Color, density: float).
     """
-    # check cache
-    shader = materials_cache.get(mat)
-    if shader is not None:
-        return shader
-
     # check if material is valid and uses nodes
     if mat is None or not mat.use_nodes:
         if mat is None:
@@ -435,7 +428,6 @@ def get_material_shader(mat):
             print(f"{mat.name}: material doesn't use nodes => diffuse")
 
         # default material: diffuse, no caustic rays
-        materials_cache[mat] = (diffuse_surface_shader, None)
         return (diffuse_surface_shader, None)
 
     # find the active output node
@@ -448,8 +440,6 @@ def get_material_shader(mat):
     if outnode is None:
         # no output node: invalid material
         print(f"{mat.name}: no active output node => black")
-
-        materials_cache[mat] = (invalid_surface_shader, None)
         return (invalid_surface_shader, None)
 
     # find linked shader for volume, if any
@@ -467,8 +457,6 @@ def get_material_shader(mat):
     surface_links = outnode.inputs['Surface'].links
     if not surface_links:
         print(f"{mat.name}: no connected surface shader node => black")
-
-        materials_cache[mat] = (invalid_surface_shader, volume_params)
         return (invalid_surface_shader, volume_params)
 
     # get node and setup shader for surface
@@ -477,8 +465,6 @@ def get_material_shader(mat):
     if setup is None:
         # node type not in dict, i.e. we don't know how to handle this node
         print(f"{mat.name}: don't know {node.type} => black")
-
-        materials_cache[mat] = (invalid_surface_shader, volume_params)
         return (invalid_surface_shader, volume_params)
 
     # setup surface shader
@@ -486,15 +472,17 @@ def get_material_shader(mat):
     if surface_shader is None:
         # e.g. rough glass/glossy => no tracing, no diffuse caustic
         print(f"{mat.name}: can't handle settings of {node.type} => black")
-
-        materials_cache[mat] = (invalid_surface_shader, None)
         return (invalid_surface_shader, None)
 
     # surface and volume setup complete
     print(f"{mat.name}: setup {node.type} shader")
 
-    materials_cache[mat] = (surface_shader, volume_params)
     return (surface_shader, volume_params)
+
+
+def cache_clear():
+    """Clear the cache used by get_material_shader."""
+    get_material_shader.cache_clear()
 
 
 # -----------------------------------------------------------------------------
@@ -511,9 +499,8 @@ def get_caustic_material(light, parent_obj):
     mat_name = f"Caustic of {light.name} for {parent_mat_name}"
 
     # lookup if it already exists, if yes we are done
-    mat = bpy.data.materials.get(mat_name)
-    if mat is not None:
-        return mat
+    if mat_name in bpy.data.materials:
+        return bpy.data.materials[mat_name]
 
     # setup material
     mat = bpy.data.materials.new(mat_name)

@@ -177,8 +177,8 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
     get_sheet, _ = utils.setup_sheet_property(caustic_bm)
 
     # make sure caches are clean
-    trace.meshes_cache.clear()
-    material.materials_cache.clear()
+    trace.cache_clear()
+    material.cache_clear()
 
     def calc_sheet_midpoint(edge):
         vert1, vert2 = edge.verts
@@ -305,10 +305,8 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
     assert all(data is not None for data in sheet_to_data.values())
 
     # cleanup generated meshes and caches
-    for obj in trace.meshes_cache:
-        obj.to_mesh_clear()
-    trace.meshes_cache.clear()
-    material.materials_cache.clear()
+    trace.cache_clear()
+    material.cache_clear()
 
     # gather the vertices whose neighbours have changed (to recalculate
     # squeeze), the edges that we may split next and the faces where we

@@ -30,14 +30,11 @@ Helper functions:
 - calc_normal
 - calc_uv
 - get_eval_mesh (uses cache to speed up access)
-
-Note that after tracing you should cleanup the generated meshes via
-for obj in trace.meshes_cache:
-    obj.to_mesh_clear()
-trace.meshes_cache.clear()
+- cache_clear (use after tracing to cleanup any generated meshes)
 """
 
 from collections import namedtuple
+from functools import lru_cache
 from math import copysign, exp
 
 import bpy
@@ -82,9 +79,11 @@ CausticData.__doc__ = """Data for a caustic vertex at the specified location.
     face_index: index of hit face from the mesh of the hit object
     """
 
-# cache evaluated meshes for faster access, meshes_cache is a dict of form
-# {object: mesh datablock of evaluated object}
-meshes_cache = dict()
+# during tracing the evaluated meshes from hit objects will be saved in a
+# functools.lru_cache, when we clear the cache we also have to clear the
+# generated meshes via obj.to_mesh_clear(), therefore we will record in this
+# set for which objects we have generated meshes
+meshed_objects = set()
 
 
 # -----------------------------------------------------------------------------
@@ -416,17 +415,21 @@ def calc_uv(obj, depsgraph, face_index, point):
     return uv.to_2d()
 
 
+@lru_cache(maxsize=None)
 def get_eval_mesh(obj, depsgraph):
     """Return mesh of object with modifiers, etc. applied"""
-    # check cache
-    mesh = meshes_cache.get(obj)
-    if mesh is not None:
-        return mesh
-
     # get mesh of object
     obj_eval = obj.evaluated_get(depsgraph)
     mesh = obj_eval.to_mesh()
     mesh.calc_normals_split()  # for loop normals
 
-    meshes_cache[obj] = mesh
+    # record object for clearing later
+    meshed_objects.add(obj)
     return mesh
+
+
+def cache_clear():
+    """Clear the cache used by get_eval_mesh and cleanup generated meshes."""
+    get_eval_mesh.cache_clear()
+    for obj in meshed_objects.pop():
+        obj.to_mesh_clear()

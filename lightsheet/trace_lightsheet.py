@@ -155,8 +155,8 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     get_sheet, _ = utils.setup_sheet_property(lightsheet_bm)
 
     # make sure caches are clean
-    trace.meshes_cache.clear()
-    material.materials_cache.clear()
+    trace.cache_clear()
+    material.cache_clear()
 
     # traced = {chain: {sheet_pos: CausticData(location, color, uv, normal)}}
     traced = defaultdict(dict)
@@ -169,10 +169,8 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     finally:
         # cleanup generated meshes and caches
         lightsheet_bm.free()
-        for obj in trace.meshes_cache:
-            obj.to_mesh_clear()
-        trace.meshes_cache.clear()
-        material.materials_cache.clear()
+        trace.cache_clear()
+        material.cache_clear()
 
         # restore original state for hidden lightsheets and caustics
         for obj, state in hidden:
@@ -199,7 +197,7 @@ def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     assert chain[-1].kind == 'DIFFUSE', chain  # check consistency of path
 
     # consistency check for copied uv-coordinates from the parent object
-    if caustic_bm.loops.layers.uv.get("UVMap") is not None:
+    if "UVMap" in caustic_bm.loops.layers.uv is not None:
         assert parent_obj.data.uv_layers
     else:
         assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
@@ -308,8 +306,8 @@ def fill_caustic_faces(caustic_bm, lightsheet):
         caustic_verts = []
         for ls_vert in ls_face.verts:
             sheet_key = tuple(ls_get_sheet(ls_vert))
-            vert = sheet_to_caustic_vert.get(sheet_key)
-            if vert is not None:
+            if sheet_key in sheet_to_caustic_vert:
+                vert = sheet_to_caustic_vert[sheet_key]
                 caustic_verts.append(vert)
 
         # create edge or face from vertices
