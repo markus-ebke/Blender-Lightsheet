@@ -159,7 +159,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
     caustic_info = caustic.caustic_info
     lightsheet = caustic_info.lightsheet
     assert lightsheet is not None
-    first_ray = utils.setup_lightsheet_first_ray(lightsheet)
+    first_ray = trace.setup_lightsheet_first_ray(lightsheet)
 
     # chain for tracing
     chain = []
@@ -180,26 +180,23 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
     trace.cache_clear()
     material.cache_clear()
 
-    def calc_sheet_midpoint(edge):
-        vert1, vert2 = edge.verts
-        sheet_pos1 = get_sheet(vert1)
-        sheet_pos2 = get_sheet(vert2)
-        sheet_mid = (sheet_pos1 + sheet_pos2) / 2
-        return sheet_mid
-
     # gather all edges that we have to split
     refine_edges = dict()  # {edge: sheet pos of midpoint}
     sheet_to_data = dict()  # {sheet pos: target data (trace.CausticData)}
 
     # gather edges that need to be split but skip non-seams
     deleted_edges = set()
-    for edge in (ed for ed in caustic_bm.edges if ed.seam):
+    for edge in caustic_bm.edges:
+        # skip non-marked edges
+        if not edge.seam:
+            continue
+
         # calc sheet midpoint, will be put into refine_edges
-        sheet_mid = calc_sheet_midpoint(edge)
+        vert1, vert2 = edge.verts
+        sheet_mid = (get_sheet(vert1) + get_sheet(vert2)) / 2
 
         if span_faces:
             # split edge if it spans different faces
-            vert1, vert2 = edge.verts
             if vert1[face_index] != vert2[face_index]:
                 refine_edges[edge] = sheet_mid
 
@@ -214,15 +211,12 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
                 deleted_edges.add(edge)
                 refine_edges[edge] = sheet_mid
             else:
-                # midpoint of edge
-                vert1, vert2 = edge.verts
-                edge_mid = (vert1.co + vert2.co) / 2
-
                 # projected midpoint with offset
                 position = cdata.location + 1e-4 * cdata.normal
                 mid_target = world_to_caustic @ position
 
                 # calc error and whether we should keep the edge
+                edge_mid = (vert1.co + vert2.co) / 2
                 rel_err = (edge_mid - mid_target).length / edge.calc_length()
                 if rel_err >= relative_tolerance:
                     refine_edges[edge] = sheet_mid
@@ -233,16 +227,17 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
         for face in caustic_bm.faces:
             if any(edge in deleted_edges for edge in face.edges):
                 # face will disappear => new boundary edges
-                for edge in face.edges:
-                    future_boundary_edges.add(edge)
+                future_boundary_edges.update(face.edges)
 
         # include all edges of (present or future) boundary faces
         for edge in caustic_bm.edges:
             if edge.is_boundary or edge in future_boundary_edges:
-                for face in edge.link_faces:
-                    for other_edge in face.edges:
-                        sheet_mid = calc_sheet_midpoint(other_edge)
-                        refine_edges[other_edge] = sheet_mid
+                other_edges = {ed for fa in edge.link_faces for ed in fa.edges
+                               if ed not in refine_edges}
+                for other_edge in other_edges:
+                    vert1, vert2 = other_edge.verts
+                    sheet_mid = (get_sheet(vert1) + get_sheet(vert2)) / 2
+                    refine_edges[other_edge] = sheet_mid
 
     # modify bmesh
     split_verts, split_edges = split_caustic_edges(caustic_bm, refine_edges)
@@ -347,13 +342,6 @@ def split_caustic_edges(caustic_bm, refine_edges):
     # sheet coordinate access
     get_sheet, set_sheet = utils.setup_sheet_property(caustic_bm)
 
-    def calc_sheet_midpoint(edge):
-        vert1, vert2 = edge.verts
-        sheet_pos1 = get_sheet(vert1)
-        sheet_pos2 = get_sheet(vert2)
-        sheet_mid = (sheet_pos1 + sheet_pos2) / 2
-        return sheet_mid
-
     # balance refinement: if two edges of a triangle will be refined, also
     # subdivide the other edge => after splitting we always get triangles
     last_added = list(refine_edges.keys())
@@ -362,11 +350,13 @@ def split_caustic_edges(caustic_bm, refine_edges):
         for edge in last_added:  # only last edges can change futher selection
             for face in edge.link_faces:
                 assert len(face.edges) == 3  # must be a triangle
-                not_refined = [
-                    ed for ed in face.edges if ed not in refine_edges]
+                not_refined = [ed for ed in face.edges
+                               if ed not in refine_edges]
                 if len(not_refined) == 1:
                     ed = not_refined[0]
-                    refine_edges[ed] = calc_sheet_midpoint(ed)
+                    vert1, vert2 = ed.verts
+                    sheet_mid = (get_sheet(vert1) + get_sheet(vert2)) / 2
+                    refine_edges[ed] = sheet_mid
                     newly_added.append(ed)
 
         last_added = newly_added

@@ -161,7 +161,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     # traced = {chain: {sheet_pos: CausticData(location, color, uv, normal)}}
     traced = defaultdict(dict)
     try:
-        first_ray = utils.setup_lightsheet_first_ray(lightsheet)
+        first_ray = trace.setup_lightsheet_first_ray(lightsheet)
         for vert in lightsheet_bm.verts:
             sheet_pos = get_sheet(vert)
             trace.trace_scene_recursive(first_ray(sheet_pos), tuple(sheet_pos),
@@ -243,7 +243,8 @@ def setup_caustic_bmesh(sheet_to_data):
     caustic_bm.loops.layers.color.new("Caustic Tint")
 
     # create uv-layer for transplanted coordinates (if any)
-    if all(data.uv is not None for data in sheet_to_data.values()):
+    if any(data.uv is not None for data in sheet_to_data.values()):
+        # assume that all data objects have uv coordinates
         caustic_bm.loops.layers.uv.new("UVMap")
 
     # create vertex layer for face index

@@ -24,16 +24,13 @@
 - verify_lightsheet_layers (used by create_lightsheet and trace_lightsheet)
 - chain_complexity (used by trace_lightsheet and refine_caustics)
 - setup_sheet_property (used by trace_lightsheet and refine_caustics)
-- setup_lightsheet_first_ray (used by trace_lightsheet and refine_caustics)
 - set_caustic_squeeze (used by trace_lightsheet and refine_caustics)
 - set_caustic_face_data (used by trace_lightsheet and refine_caustics)
 """
 
 import bmesh
-from mathutils import Color, Matrix, Vector
+from mathutils import Matrix, Vector
 from mathutils.geometry import area_tri
-
-from lightsheet import trace
 
 
 def bmesh_delete_loose(bm, use_verts=True, use_edges=True):
@@ -119,38 +116,6 @@ def setup_sheet_property(bm):
         vert[sheet_x], vert[sheet_y], vert[sheet_z] = sheet_pos
 
     return get_sheet, set_sheet
-
-
-def setup_lightsheet_first_ray(lightsheet):
-    """Generate a function that returns the ray for a given sheet position."""
-    sheet_to_world = lightsheet.matrix_world
-    origin = sheet_to_world.to_translation()
-
-    # setup first ray of given vertex coordinate depending on light type
-    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
-    white = Color((1.0, 1.0, 1.0))
-    white.freeze()  # will use as default value, therefore should be immutable
-    if lightsheet.parent.data.type == 'SUN':
-        # parallel projection along -z axis (local coordinates)
-        # note that origin = matrix @ Vector((0, 0, 0))
-        target = sheet_to_world @ Vector((0, 0, -1))
-        minus_z_axis = (target - origin).normalized()
-        minus_z_axis.freeze()  # will use as default value, should be immutable
-
-        # parallel projection in sun direction
-        def first_ray(sheet_pos):
-            ray_origin = sheet_to_world @ Vector(sheet_pos)
-            return trace.Ray(ray_origin, minus_z_axis, white, tuple())
-    else:
-        origin.freeze()  # will use as default value, should be immutable
-
-        # project from origin of lightsheet coordinate system
-        def first_ray(sheet_pos):
-            ray_direction = sheet_to_world @ Vector(sheet_pos) - origin
-            ray_direction.normalize()
-            return trace.Ray(origin, ray_direction, white, tuple())
-
-    return first_ray
 
 
 def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,

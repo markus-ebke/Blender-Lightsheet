@@ -20,6 +20,9 @@
 # ##### END GPL LICENSE BLOCK #####
 """Functions that are used for tracing rays and creating the caustic bmeshes.
 
+Setup rays via
+- setup_lightsheet_first_ray
+
 Tracing of rays is done via
 - trace_scene_recursive
 - scene_raycast
@@ -38,7 +41,7 @@ from functools import lru_cache
 from math import copysign, exp
 
 import bpy
-from mathutils import Color
+from mathutils import Color, Vector
 from mathutils.geometry import (barycentric_transform, intersect_point_tri,
                                 tessellate_polygon)
 
@@ -87,6 +90,41 @@ meshed_objects = set()
 
 
 # -----------------------------------------------------------------------------
+# Ray setup
+# -----------------------------------------------------------------------------
+def setup_lightsheet_first_ray(lightsheet):
+    """Generate a function that returns the ray for a given sheet position."""
+    sheet_to_world = lightsheet.matrix_world
+    origin = sheet_to_world.to_translation()
+
+    # setup first ray of given vertex coordinate depending on light type
+    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
+    white = Color((1.0, 1.0, 1.0))
+    white.freeze()  # will use as default value, therefore should be immutable
+    if lightsheet.parent.data.type == 'SUN':
+        # parallel projection along -z axis (local coordinates)
+        # note that origin = matrix @ Vector((0, 0, 0))
+        target = sheet_to_world @ Vector((0, 0, -1))
+        minus_z_axis = (target - origin).normalized()
+        minus_z_axis.freeze()  # will use as default value, should be immutable
+
+        # parallel projection in sun direction
+        def first_ray(sheet_pos):
+            ray_origin = sheet_to_world @ Vector(sheet_pos)
+            return Ray(ray_origin, minus_z_axis, white, tuple())
+    else:
+        origin.freeze()  # will use as default value, should be immutable
+
+        # project from origin of lightsheet coordinate system
+        def first_ray(sheet_pos):
+            ray_direction = sheet_to_world @ Vector(sheet_pos) - origin
+            ray_direction.normalize()
+            return Ray(origin, ray_direction, white, tuple())
+
+    return first_ray
+
+
+# -----------------------------------------------------------------------------
 # Trace functions
 # -----------------------------------------------------------------------------
 def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
@@ -103,13 +141,11 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
     assert location is not None and normal is not None, (location, normal)
 
     # get hit face
-    obj_mesh = get_eval_mesh(obj, depsgraph)
-    face = obj_mesh.polygons[face_index]
+    face = get_eval_mesh(obj, depsgraph).polygons[face_index]
 
     # get material on hit face with given index
     if obj.material_slots:
-        mat_idx = face.material_index
-        mat = obj.material_slots[mat_idx].material
+        mat = obj.material_slots[face.material_index].material
     else:
         mat = None
 
@@ -127,12 +163,9 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
                 caustic_key = old_chain + (Link(obj, kind, None),)
                 sheet_to_data = traced[caustic_key]
 
-                # calculate uv-coordinates if any
-                if obj.data.uv_layers.active:
-                    location_obj = matrix.inverted() @ location
-                    uv = calc_uv(obj, depsgraph, face_index, location_obj)
-                else:
-                    uv = None
+                # calculate uv-coordinates (None if obj has no active uv-layer)
+                uv = calc_uv(obj, depsgraph, face_index,
+                             point=matrix.inverted() @ location)
 
                 # setup vector perpendicular to face (will be used to offset
                 # caustic), if we hit the backside use the reversed normal
@@ -154,21 +187,19 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
             if old_chain:
                 previous_link = old_chain[-1]
                 if previous_link.volume_params is not None:
-                    assert previous_link.kind in {'REFRACT', 'TRANSPARENT'}
                     # compute transmittance via Beer-Lambert law
                     volume_color, volume_density = previous_link.volume_params
                     ray_length = (location - ray_origin).length
-                    volume = (exp(-(1 - val) * volume_density * ray_length)
-                              for val in volume_color)
+                    volume = [exp(-(1 - val) * volume_density * ray_length)
+                              for val in volume_color]
 
             # tint the color of the new ray
-            mult = (c * t * v for (c, t, v) in zip(color, tint, volume))
+            mult = [c * t * v for (c, t, v) in zip(color, tint, volume)]
             new_color = Color(mult)
 
             # extend path of ray
-            headed_inside = new_direction.dot(normal) < 0
-            if kind in {'REFRACT', 'TRANSPARENT'} and headed_inside:
-                # consider volume absorption
+            if new_direction.dot(normal) < 0:
+                # consider volume absorption if headed inside
                 new_chain = old_chain + (Link(obj, kind, volume_params),)
             else:
                 # no volume absorption necessary
@@ -183,19 +214,18 @@ def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
 def scene_raycast(ray_origin, ray_direction, depsgraph):
     """Raycast all visible objects in the set scene, return hit object info."""
     # cast the ray
-    scene = depsgraph.scene
     if bpy.app.version < (2, 91, 0):
-        success, location, normal, face_index, obj, matrix = scene.ray_cast(
+        result = depsgraph.scene.ray_cast(
             view_layer=depsgraph.view_layer,
             origin=ray_origin,
             direction=ray_direction)
     else:
         # API change: https://developer.blender.org/rBA82ed41ec6324
-        success, location, normal, face_index, obj, matrix = scene.ray_cast(
+        result = depsgraph.scene.ray_cast(
             depsgraph=depsgraph,
             origin=ray_origin,
             direction=ray_direction)
-
+    success, location, normal, face_index, obj, matrix = result
     if not success:
         # no hit
         return None, None, None, None, None
@@ -229,13 +259,11 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
             return (None, trail)
 
         # get hit face
-        obj_mesh = get_eval_mesh(obj, depsgraph)
-        face = obj_mesh.polygons[face_index]
+        face = get_eval_mesh(obj, depsgraph).polygons[face_index]
 
         # get material on hit face with given index
         if obj.material_slots:
-            mat_idx = face.material_index
-            mat = obj.material_slots[mat_idx].material
+            mat = obj.material_slots[face.material_index].material
         else:
             mat = None
 
@@ -256,12 +284,9 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         if kind == 'DIFFUSE':
             caustic_key = old_chain + (Link(obj, kind, None),)
 
-            # calculate uv-coordinates if any
-            if obj.data.uv_layers.active:
-                location_obj = matrix.inverted() @ location
-                uv = calc_uv(obj, depsgraph, face_index, location_obj)
-            else:
-                uv = None
+            # calculate uv-coordinates (None if obj has no active uv-layer)
+            uv = calc_uv(obj, depsgraph, face_index,
+                         point=matrix.inverted() @ location)
 
             # setup vector perpendicular to face (will be used to offset
             # caustic), if we hit the backside use the reversed normal
@@ -279,21 +304,19 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
             if old_chain:
                 previous_link = old_chain[-1]
                 if previous_link.volume_params is not None:
-                    assert previous_link.kind in {'REFRACT', 'TRANSPARENT'}
                     # compute transmittance via Beer-Lambert law
                     volume_color, volume_density = previous_link.volume_params
                     ray_length = (location - ray_origin).length
-                    volume = (exp(-(1 - val) * volume_density * ray_length)
-                              for val in volume_color)
+                    volume = [exp(-(1 - val) * volume_density * ray_length)
+                              for val in volume_color]
 
             # tint the color of the new ray
-            mult = (c * t * v for (c, t, v) in zip(color, tint, volume))
+            mult = [c * t * v for (c, t, v) in zip(color, tint, volume)]
             new_color = Color(mult)
 
             # extend path of ray
-            headed_inside = new_direction.dot(normal) < 0
-            if kind in {'REFRACT', 'TRANSPARENT'} and headed_inside:
-                # consider volume absorption
+            if new_direction.dot(normal) < 0:
+                # consider volume absorption if headed inside
                 new_chain = old_chain + (Link(obj, kind, volume_params),)
             else:
                 # no volume absorption necessary
@@ -319,12 +342,11 @@ def object_raycast(obj, ray_origin, ray_direction, depsgraph):
     matrix_inv = matrix.inverted()
     ray_origin_obj = matrix_inv @ ray_origin
     ray_target_obj = matrix_inv @ (ray_origin + ray_direction)
-    ray_direction_obj = ray_target_obj - ray_origin_obj
 
     # raycast
-    success, location_obj, normal_obj, face_index, = obj.ray_cast(
-        ray_origin_obj, ray_direction_obj, depsgraph=depsgraph)
-
+    result = obj.ray_cast(ray_origin_obj, ray_target_obj - ray_origin_obj,
+                          depsgraph=depsgraph)
+    success, location_obj, normal_obj, face_index = result
     if not success:
         return None, None, None, None
 
@@ -346,32 +368,30 @@ def calc_normal(obj, depsgraph, face_index, point):
     face = mesh.polygons[face_index]
 
     # # do we have to smooth the normals? if no then flat shading
-    use_smooth = face.use_smooth
-    if not use_smooth:
+    if not face.use_smooth:
         return face.normal
 
     # coordinates, normals and uv for the vertices of the face
-    vertex_coords, vertex_normals = [], []
+    vert_co, vert_normal = [], []
     for idx in face.loop_indices:
         loop = mesh.loops[idx]
         loop_vert = mesh.vertices[loop.vertex_index]
-        vertex_coords.append(loop_vert.co)
-        vertex_normals.append(loop.normal)
+        vert_co.append(loop_vert.co)
+        vert_normal.append(loop.normal)
 
     # tessellate face and find the triangle that contains the point
     # if no triangle is found (is that even possible???) use the last one
-    triangles = tessellate_polygon((vertex_coords,))
+    triangles = tessellate_polygon((vert_co,))
     assert len(triangles) > 0  # will loop => will define tri and v1, v2, v3
     for tri in triangles:
-        v1, v2, v3 = (vertex_coords[idx] for idx in tri)
+        v1, v2, v3 = vert_co[tri[0]], vert_co[tri[1]], vert_co[tri[2]]
         if intersect_point_tri(point, v1, v2, v3):
-            # found triangle
-            # note that tri and v1, v2, v3 are defined now
+            # found triangle, note that tri and v1, v2, v3 are defined now
             break
 
     # calculate smooth normal at given point, interpolate via barycentric
     # transformation, note that interpolated vector might not be normalized
-    n1, n2, n3 = (vertex_normals[idx] for idx in tri)
+    n1, n2, n3 = vert_normal[tri[0]], vert_normal[tri[1]], vert_normal[tri[2]]
     normal = barycentric_transform(point, v1, v2, v3, n1, n2, n3)
 
     return normal.normalized()
@@ -389,27 +409,28 @@ def calc_uv(obj, depsgraph, face_index, point):
 
     # coordinates, normals and uv for the vertices of the face
     face = mesh.polygons[face_index]
-    vertex_coords, vertex_uvs = [], []
+    vert_co, vert_uv = [], []
     for idx in face.loop_indices:
         loop = mesh.loops[idx]
         loop_vert = mesh.vertices[loop.vertex_index]
-        vertex_coords.append(loop_vert.co)
-        vertex_uvs.append(uv_layer.data[loop.index].uv)
+        vert_co.append(loop_vert.co)
+        vert_uv.append(uv_layer.data[loop.index].uv)
 
     # tessellate face and find the triangle that contains the point
     # if no triangle is found (is that even possible???) use the last one
-    triangles = tessellate_polygon((vertex_coords,))
+    triangles = tessellate_polygon((vert_co,))
     assert len(triangles) > 0  # will loop => will define tri and v1, v2, v3
     for tri in triangles:
-        v1, v2, v3 = (vertex_coords[idx] for idx in tri)
+        v1, v2, v3 = vert_co[tri[0]], vert_co[tri[1]], vert_co[tri[2]]
         if intersect_point_tri(point, v1, v2, v3):
-            # found triangle
-            # note that tri and v1, v2, v3 are defined now
+            # found triangle, note that tri and v1, v2, v3 are defined now
             break
 
     # interpolate uv-coordinates via barycentric transformation, note that
     # barycentric transform only works with 3d vectors
-    uv1, uv2, uv3 = (vertex_uvs[idx].to_3d() for idx in tri)
+    uv1 = vert_uv[tri[0]].to_3d()
+    uv2 = vert_uv[tri[1]].to_3d()
+    uv3 = vert_uv[tri[2]].to_3d()
     uv = barycentric_transform(point, v1, v2, v3, uv1, uv2, uv3)
 
     return uv.to_2d()
@@ -431,5 +452,6 @@ def get_eval_mesh(obj, depsgraph):
 def cache_clear():
     """Clear the cache used by get_eval_mesh and cleanup generated meshes."""
     get_eval_mesh.cache_clear()
-    for obj in meshed_objects.pop():
+    while meshed_objects:
+        obj = meshed_objects.pop()
         obj.to_mesh_clear()
