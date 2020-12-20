@@ -20,8 +20,9 @@
 # ##### END GPL LICENSE BLOCK #####
 """Functions that are used for tracing rays and creating the caustic bmeshes.
 
-Setup rays via
+Setup rays and depsgraph via
 - setup_lightsheet_first_ray
+- configure_for_trace (is context manager)
 
 Tracing of rays is done via
 - trace_scene_recursive
@@ -37,6 +38,7 @@ Helper functions:
 """
 
 from collections import namedtuple
+from contextlib import contextmanager
 from functools import lru_cache
 from math import copysign, exp
 
@@ -90,7 +92,7 @@ meshed_objects = set()
 
 
 # -----------------------------------------------------------------------------
-# Ray setup
+# Prepare for trace
 # -----------------------------------------------------------------------------
 def setup_lightsheet_first_ray(lightsheet):
     """Generate a function that returns the ray for a given sheet position."""
@@ -124,118 +126,121 @@ def setup_lightsheet_first_ray(lightsheet):
     return first_ray
 
 
+@contextmanager
+def configure_for_trace(context):
+    """Contextmanager that configures the depsgraph for caustic tracing."""
+    # hide lightsheets and caustics from raycast, note that hiding selected
+    # objects will unselect them
+    hidden = []
+    for coll in context.scene.collection.children:
+        if (coll.name.startswith("Lightsheets")
+                or coll.name.startswith("Caustics")):
+            for obj in coll.objects:
+                hidden.append((obj, obj.hide_viewport, obj.select_get()))
+                obj.hide_viewport = True
+
+    # make sure that caches are clean
+    cache_clear()
+    material.cache_clear()
+
+    try:
+        yield context.view_layer.depsgraph
+    finally:
+        # cleanup caches
+        cache_clear()
+        material.cache_clear()
+
+        # restore original state for hidden lightsheets and caustics
+        for obj, view_state, select_state in hidden:
+            obj.hide_viewport = view_state
+            obj.select_set(select_state)
+
+
 # -----------------------------------------------------------------------------
 # Trace functions
 # -----------------------------------------------------------------------------
-def trace_scene_recursive(ray, sheet_pos, depsgraph, max_bounces, traced):
+def trace_scene(ray, depsgraph, max_bounces):
     """Recursively trace a ray through the scene, add data to traced dict."""
-    ray_origin, ray_direction, color, old_chain = ray
-    obj, location, normal, face_index, matrix = scene_raycast(
-        ray_origin, ray_direction, depsgraph)
+    result = []
+    stack = [ray]  # implement recursion via stack
+    while stack:
+        ray_origin, ray_direction, color, old_chain = stack.pop()
+        obj, location, normal, face_index, matrix = scene_raycast(
+            ray_origin, ray_direction, depsgraph)
 
-    # if we hit the background we reached the end of the path
-    if obj is None:
-        return
+        # if we hit the background we reached the end of the path
+        if obj is None:
+            continue
 
-    # not the end of the path, right???
-    assert location is not None and normal is not None, (location, normal)
+        # get hit face
+        face = get_eval_mesh(obj, depsgraph).polygons[face_index]
 
-    # get hit face
-    face = get_eval_mesh(obj, depsgraph).polygons[face_index]
+        # get material on hit face with given index
+        if obj.material_slots:
+            mat = obj.material_slots[face.material_index].material
+        else:
+            mat = None
 
-    # get material on hit face with given index
-    if obj.material_slots:
-        mat = obj.material_slots[face.material_index].material
-    else:
-        mat = None
+        # determine surface interactions from material (i.e. does the ray
+        # continue and if yes, how?)
+        surface_shader, volume_params = material.get_material_shader(mat)
+        for kind, new_direction, tint in surface_shader(ray_direction, normal):
+            # diffuse interactions will show reflective or refractive
+            # caustics, non-diffuse interactions will add new rays if the new
+            # path is not longer than the bounce limit
+            if kind == 'DIFFUSE':
+                # add vertex only for reflective and refractive caustics
+                if any(s[1] in {'REFLECT', 'REFRACT'} for s in old_chain):
+                    # calc uv-coordinates (None if obj has no active uv-layer)
+                    uv = calc_uv(obj, depsgraph, face_index,
+                                 point=matrix.inverted() @ location)
 
-    # determine surface interactions from material (i.e. does the ray
-    # continue and if yes, how?)
-    surface_shader, volume_params = material.get_material_shader(mat)
-    for kind, new_direction, tint in surface_shader(ray_direction, normal):
-        # diffuse interactions will show reflective or refractive caustics,
-        # non-diffuse interactions will add new rays if the new path is not
-        # longer than the bounce limit
-        if kind == 'DIFFUSE':
-            # add vertex to caustic only for reflective and refractive caustics
-            if any(step[1] in {'REFLECT', 'REFRACT'} for step in old_chain):
-                # get the caustic data mapping for this chain of interactions
-                caustic_key = old_chain + (Link(obj, kind, None),)
-                sheet_to_data = traced[caustic_key]
+                    # setup vector perpendicular to face (will be used to
+                    # offset caustic), if we hit the backside use reversed
+                    # normal
+                    if ray_direction.dot(face.normal) < 0:
+                        perp = face.normal
+                    else:
+                        perp = -face.normal
 
-                # calculate uv-coordinates (None if obj has no active uv-layer)
-                uv = calc_uv(obj, depsgraph, face_index,
-                             point=matrix.inverted() @ location)
+                    # setup data and add to result
+                    chain = old_chain + (Link(obj, kind, None),)
+                    cdata = CausticData(location, color, uv, perp, face_index)
+                    result.append((chain, cdata))
+            elif len(old_chain) < max_bounces:
+                assert new_direction is not None
 
-                # setup vector perpendicular to face (will be used to offset
-                # caustic), if we hit the backside use the reversed normal
-                normal = face.normal
-                if ray_direction.dot(normal) > 0:
-                    normal = -normal
+                # move the starting point a safe distance away from the object
+                offset = copysign(1e-5, new_direction.dot(face.normal))
+                new_origin = location + offset * face.normal
 
-                # set data
-                cdata = CausticData(location, color, uv, normal, face_index)
-                sheet_to_data[sheet_pos] = cdata
-        elif len(old_chain) < max_bounces:
-            assert new_direction is not None
-            # move the starting point a safe distance away from the object
-            offset = copysign(1e-5, new_direction.dot(face.normal))
-            new_origin = location + offset * face.normal
+                # compute volume absorption from previous interaction
+                volume = (1.0, 1.0, 1.0)
+                if old_chain:
+                    previous_link = old_chain[-1]
+                    if previous_link.volume_params is not None:
+                        # compute transmittance via Beer-Lambert law
+                        vol_color, vol_density = previous_link.volume_params
+                        ray_length = (location - ray_origin).length
+                        volume = [exp(-(1 - val) * vol_density * ray_length)
+                                  for val in vol_color]
 
-            # compute volume absorption from previous interaction
-            volume = (1.0, 1.0, 1.0)
-            if old_chain:
-                previous_link = old_chain[-1]
-                if previous_link.volume_params is not None:
-                    # compute transmittance via Beer-Lambert law
-                    volume_color, volume_density = previous_link.volume_params
-                    ray_length = (location - ray_origin).length
-                    volume = [exp(-(1 - val) * volume_density * ray_length)
-                              for val in volume_color]
+                # tint the color of the new ray
+                mult = [c * t * v for (c, t, v) in zip(color, tint, volume)]
+                new_color = Color(mult)
 
-            # tint the color of the new ray
-            mult = [c * t * v for (c, t, v) in zip(color, tint, volume)]
-            new_color = Color(mult)
+                # extend path of ray
+                if new_direction.dot(normal) < 0:
+                    # consider volume absorption if headed inside
+                    new_chain = old_chain + (Link(obj, kind, volume_params),)
+                else:
+                    # no volume absorption necessary
+                    new_chain = old_chain + (Link(obj, kind, None),)
 
-            # extend path of ray
-            if new_direction.dot(normal) < 0:
-                # consider volume absorption if headed inside
-                new_chain = old_chain + (Link(obj, kind, volume_params),)
-            else:
-                # no volume absorption necessary
-                new_chain = old_chain + (Link(obj, kind, None),)
-
-            # trace new ray
-            new_ray = Ray(new_origin, new_direction, new_color, new_chain)
-            trace_scene_recursive(new_ray, sheet_pos, depsgraph, max_bounces,
-                                  traced)
-
-
-def scene_raycast(ray_origin, ray_direction, depsgraph):
-    """Raycast all visible objects in the set scene, return hit object info."""
-    # cast the ray
-    if bpy.app.version < (2, 91, 0):
-        result = depsgraph.scene.ray_cast(
-            view_layer=depsgraph.view_layer,
-            origin=ray_origin,
-            direction=ray_direction)
-    else:
-        # API change: https://developer.blender.org/rBA82ed41ec6324
-        result = depsgraph.scene.ray_cast(
-            depsgraph=depsgraph,
-            origin=ray_origin,
-            direction=ray_direction)
-    success, location, normal, face_index, obj, matrix = result
-    if not success:
-        # no hit
-        return None, None, None, None, None
-
-    # calculate (smooth) normal
-    location_obj = matrix.inverted() @ location
-    normal_obj = calc_normal(obj, depsgraph, face_index, location_obj)
-    normal = (matrix @ (location_obj + normal_obj) - location).normalized()
-
-    return obj, location, normal, face_index, matrix
+                # trace new ray
+                new_ray = Ray(new_origin, new_direction, new_color, new_chain)
+                stack.append(new_ray)
+    return result
 
 
 def trace_along_chain(ray, depsgraph, chain_to_follow):
@@ -250,13 +255,14 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
     # trace along the given chain of interactions
     for obj, kind_to_follow, _ in chain_to_follow:
         ray_origin, ray_direction, color, old_chain = ray
-        location, normal, face_index, matrix = object_raycast(
-            obj, ray_origin, ray_direction, depsgraph)
+        hit_obj, location, normal, face_index, matrix = scene_raycast(
+            ray_origin, ray_direction, depsgraph, obj)
         trail.append(location)
 
         # if we missed the object, the caustic will be empty at this position
-        if location is None:
+        if hit_obj is None:
             return (None, trail)
+        assert hit_obj is obj, (hit_obj, obj)
 
         # get hit face
         face = get_eval_mesh(obj, depsgraph).polygons[face_index]
@@ -282,19 +288,23 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
 
         kind, new_direction, tint = found_intersection
         if kind == 'DIFFUSE':
-            caustic_key = old_chain + (Link(obj, kind, None),)
-
             # calculate uv-coordinates (None if obj has no active uv-layer)
             uv = calc_uv(obj, depsgraph, face_index,
                          point=matrix.inverted() @ location)
 
             # setup vector perpendicular to face (will be used to offset
-            # caustic), if we hit the backside use the reversed normal
-            normal = face.normal
-            if ray_direction.dot(normal) > 0:
-                normal = -normal
+            # caustic), if we hit the backside use reversed normal
+            if ray_direction.dot(face.normal) < 0:
+                perp = face.normal
+            else:
+                perp = -face.normal
+
+            # setup data
+            chain = old_chain + (Link(obj, kind, None),)
+            cdata = CausticData(location, color, uv, perp, face_index)
         else:
             assert new_direction is not None
+
             # move the starting point a safe distance away from the object
             offset = copysign(1e-5, new_direction.dot(face.normal))
             new_origin = location + offset * face.normal
@@ -305,10 +315,10 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
                 previous_link = old_chain[-1]
                 if previous_link.volume_params is not None:
                     # compute transmittance via Beer-Lambert law
-                    volume_color, volume_density = previous_link.volume_params
+                    vol_color, vol_density = previous_link.volume_params
                     ray_length = (location - ray_origin).length
-                    volume = [exp(-(1 - val) * volume_density * ray_length)
-                              for val in volume_color]
+                    volume = [exp(-(1 - val) * vol_density * ray_length)
+                              for val in vol_color]
 
             # tint the color of the new ray
             mult = [c * t * v for (c, t, v) in zip(color, tint, volume)]
@@ -326,36 +336,40 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
             ray = Ray(new_origin, new_direction, new_color, new_chain)
 
     # check chain
-    assert len(caustic_key) == len(chain_to_follow)
-    for link_followed, link_to_follow in zip(caustic_key, chain_to_follow):
+    assert len(chain) == len(chain_to_follow)
+    for link_followed, link_to_follow in zip(chain, chain_to_follow):
         assert link_followed.object == link_to_follow.object
         assert link_followed.kind == link_to_follow.kind
 
-    cdata = CausticData(location, color, uv, normal, face_index)
     return (cdata, trail)
 
 
-def object_raycast(obj, ray_origin, ray_direction, depsgraph):
-    """Raycast only one object, return hit info."""
-    # transform to object space
-    matrix = obj.evaluated_get(depsgraph).matrix_world.copy()
-    matrix_inv = matrix.inverted()
-    ray_origin_obj = matrix_inv @ ray_origin
-    ray_target_obj = matrix_inv @ (ray_origin + ray_direction)
+def scene_raycast(ray_origin, ray_direction, depsgraph, obj=None):
+    """Raycast all visible objects in the set scene, return hit object info."""
+    # cast the ray
+    if bpy.app.version < (2, 91, 0):
+        result = depsgraph.scene.ray_cast(
+            view_layer=depsgraph.view_layer,
+            origin=ray_origin,
+            direction=ray_direction)
+    else:
+        # API change: https://developer.blender.org/rBA82ed41ec6324
+        result = depsgraph.scene.ray_cast(
+            depsgraph=depsgraph,
+            origin=ray_origin,
+            direction=ray_direction)
+    success, location, normal, face_index, hit_obj, matrix = result
 
-    # raycast
-    result = obj.ray_cast(ray_origin_obj, ray_target_obj - ray_origin_obj,
-                          depsgraph=depsgraph)
-    success, location_obj, normal_obj, face_index = result
-    if not success:
-        return None, None, None, None
+    # check if hit is valid
+    if not success or (obj is not None and hit_obj is not obj):
+        return None, None, None, None, None
 
     # calculate (smooth) normal
-    normal_obj = calc_normal(obj, depsgraph, face_index, location_obj)
-    location = matrix @ location_obj
+    location_obj = matrix.inverted() @ location
+    normal_obj = calc_normal(hit_obj, depsgraph, face_index, location_obj)
     normal = (matrix @ (location_obj + normal_obj) - location).normalized()
 
-    return location, normal, face_index, matrix
+    return hit_obj, location, normal, face_index, matrix
 
 
 # -----------------------------------------------------------------------------
@@ -375,8 +389,7 @@ def calc_normal(obj, depsgraph, face_index, point):
     vert_co, vert_normal = [], []
     for idx in face.loop_indices:
         loop = mesh.loops[idx]
-        loop_vert = mesh.vertices[loop.vertex_index]
-        vert_co.append(loop_vert.co)
+        vert_co.append(mesh.vertices[loop.vertex_index].co)
         vert_normal.append(loop.normal)
 
     # tessellate face and find the triangle that contains the point
@@ -412,8 +425,7 @@ def calc_uv(obj, depsgraph, face_index, point):
     vert_co, vert_uv = [], []
     for idx in face.loop_indices:
         loop = mesh.loops[idx]
-        loop_vert = mesh.vertices[loop.vertex_index]
-        vert_co.append(loop_vert.co)
+        vert_co.append(mesh.vertices[loop.vertex_index].co)
         vert_uv.append(uv_layer.data[loop.index].uv)
 
     # tessellate face and find the triangle that contains the point

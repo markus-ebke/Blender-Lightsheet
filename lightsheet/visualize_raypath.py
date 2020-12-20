@@ -28,11 +28,11 @@ import bmesh
 import bpy
 from bpy.types import Operator
 
-from lightsheet import material, trace, utils
+from lightsheet import trace, utils
 
 
 class LIGHTSHEET_OT_visualize_raypath(Operator):
-    """Select vertices in caustic and visualize their raypath"""
+    """Visualize the raypath for the selected vertices of the active caustic"""
     bl_idname = "lightsheet.visualize"
     bl_label = "Visualize Raypath"
     bl_options = {'REGISTER', 'UNDO'}
@@ -77,14 +77,14 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
 
     def execute(self, context):
         obj = context.object
-        depsgraph = context.view_layer.depsgraph
 
         # visualize
-        tic = perf_counter()
-        trails = gather_trails(obj, depsgraph)
-        path_obj = convert_trails_to_objects(trails, obj)
-        context.scene.collection.objects.link(path_obj)
-        toc = perf_counter()
+        with trace.configure_for_trace(context) as depsgraph:
+            tic = perf_counter()
+            trails = gather_trails(obj, depsgraph)
+            path_obj = convert_trails_to_objects(trails, obj)
+            context.scene.collection.objects.link(path_obj)
+            toc = perf_counter()
 
         # report statistics
         v_stats = f"Retraced {len(trails):,} verts"
@@ -102,7 +102,7 @@ def gather_trails(caustic, depsgraph):
     # setup rays from lightsheet
     lightsheet = caustic.caustic_info.lightsheet
     assert lightsheet is not None
-    first_ray = utils.setup_lightsheet_first_ray(lightsheet)
+    first_ray = trace.setup_lightsheet_first_ray(lightsheet)
 
     # chain for retracing
     chain = []
@@ -115,10 +115,6 @@ def gather_trails(caustic, depsgraph):
 
     # coordinates of source position on lighsheet
     get_sheet, _ = utils.setup_sheet_property(caustic_bm)
-
-    # make sure caches are clean
-    trace.meshes_cache.clear()
-    material.materials_cache.clear()
 
     # (re)trace rays for selected vertices and save trails
     trails = []
@@ -136,12 +132,6 @@ def gather_trails(caustic, depsgraph):
         position = cdata.location + 1e-4 * cdata.normal
         trail[-1] = position
         trails.append(trail)
-
-    # cleanup generated meshes and caches
-    for obj in trace.meshes_cache:
-        obj.to_mesh_clear()
-    trace.meshes_cache.clear()
-    material.materials_cache.clear()
 
     # free caustic bmesh
     caustic_bm.free()

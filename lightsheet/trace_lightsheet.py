@@ -72,26 +72,14 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
-        # parameters for tracing
-        lightsheet = verify_object_is_lightsheet(context.object)
-        depsgraph = context.view_layer.depsgraph
-        max_bounces = self.max_bounces
-
-        # raytrace lightsheet and convert resulting caustics to objects
-        tic = perf_counter()
-        traced = trace_lightsheet(lightsheet, depsgraph, max_bounces)
-        traced_sorted = sorted(
-            traced.items(), key=lambda item: utils.chain_complexity(item[0]))
-        caustics = []
-        for chain, sheet_to_data in traced_sorted:
-            obj = convert_caustic_to_objects(lightsheet, chain, sheet_to_data)
-
-            # if wanted delete empty caustics
-            if self.dismiss_empty_caustics and len(obj.data.polygons) == 0:
-                bpy.data.objects.remove(obj)
-            else:
-                caustics.append(obj)
-        toc = perf_counter()
+        # raytrace lightsheet
+        with trace.configure_for_trace(context) as depsgraph:
+            tic = perf_counter()
+            lightsheet = verify_object_is_lightsheet(context.object)
+            caustics = trace_lightsheet(lightsheet, depsgraph,
+                                        self.max_bounces,
+                                        self.dismiss_empty_caustics)
+            toc = perf_counter()
 
         # get or setup collection for caustics
         coll_name = f"Caustics in {context.scene.name}"
@@ -102,15 +90,13 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
                 coll = bpy.data.collections.new(coll_name)
             context.scene.collection.children.link(coll)
 
-        # get material and add caustic object to caustic collection
+        # add the fresh caustics to caustic collection
         for obj in caustics:
-            mat = material.get_caustic_material(lightsheet.parent, obj.parent)
-            obj.data.materials.append(mat)
             coll.objects.link(obj)
 
         # report statistics
-        c_stats = "{} caustics".format(len(caustics))
-        t_stats = "{:.1f}s".format((toc - tic))
+        c_stats = f"{len(caustics)} caustics"
+        t_stats = f"{toc - tic:.1f}s"
         self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
 
         return {"FINISHED"}
@@ -138,15 +124,8 @@ def verify_object_is_lightsheet(obj):
     return obj
 
 
-def trace_lightsheet(lightsheet, depsgraph, max_bounces):
-    """Trace rays from lighsheet and return caustic coordinates in dict."""
-    # hide lightsheets and caustics from raycast
-    hidden = []
-    for obj in depsgraph.view_layer.objects:
-        if "lightsheet" in obj.name.lower() or obj.caustic_info.path:
-            hidden.append((obj, obj.hide_viewport))
-            obj.hide_viewport = True
-
+def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
+    """Trace rays from lighsheet and return list of caustics."""
     # convert lightsheet to bmesh
     lightsheet_bm = bmesh.new(use_operators=False)
     lightsheet_bm.from_mesh(lightsheet.data)
@@ -154,29 +133,36 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces):
     # coordinates of source position on lighsheet
     get_sheet, _ = utils.setup_sheet_property(lightsheet_bm)
 
-    # make sure caches are clean
-    trace.cache_clear()
-    material.cache_clear()
-
-    # traced = {chain: {sheet_pos: CausticData(location, color, uv, normal)}}
+    # traced = {chain: {sheet_pos: CausticData}}
     traced = defaultdict(dict)
-    try:
-        first_ray = trace.setup_lightsheet_first_ray(lightsheet)
-        for vert in lightsheet_bm.verts:
-            sheet_pos = get_sheet(vert)
-            trace.trace_scene_recursive(first_ray(sheet_pos), tuple(sheet_pos),
-                                        depsgraph, max_bounces, traced)
-    finally:
-        # cleanup generated meshes and caches
-        lightsheet_bm.free()
-        trace.cache_clear()
-        material.cache_clear()
+    first_ray = trace.setup_lightsheet_first_ray(lightsheet)
+    for vert in lightsheet_bm.verts:
+        sheet_pos = get_sheet(vert)
 
-        # restore original state for hidden lightsheets and caustics
-        for obj, state in hidden:
-            obj.hide_viewport = state
+        # trace ray
+        result = trace.trace_scene(first_ray(sheet_pos), depsgraph,
+                                   max_bounces)
 
-    return traced
+        # add data to traced
+        sheet_key = tuple(sheet_pos)
+        for chain, cdata in result:
+            traced[chain][sheet_key] = cdata
+    lightsheet_bm.free()
+
+    # convert to blender objects
+    caustics = []
+    traced_sorted = sorted(traced.items(),
+                           key=lambda item: utils.chain_complexity(item[0]))
+    for chain, sheet_to_data in traced_sorted:
+        caustic = convert_caustic_to_objects(lightsheet, chain, sheet_to_data)
+
+        # if wanted delete empty caustics
+        if dismiss_empty and len(caustic.data.polygons) == 0:
+            bpy.data.objects.remove(caustic)
+        else:
+            caustics.append(caustic)
+
+    return caustics
 
 
 def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
@@ -214,8 +200,7 @@ def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     if parent_obj.data.uv_layers:
         parent_uv_layer = parent_obj.data.uv_layers.active
         assert parent_obj.data.uv_layers.active is not None
-        uv_layer = me.uv_layers["UVMap"]
-        uv_layer.name = parent_uv_layer.name
+        me.uv_layers["UVMap"].name = parent_uv_layer.name
 
     # before setting parent, undo parent transform
     me.transform(parent_obj.matrix_world.inverted())
@@ -226,11 +211,14 @@ def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
 
     # fill out caustic_info property
     caustic.caustic_info.lightsheet = lightsheet
-    caustic_path = caustic.caustic_info.path
     for obj, kind, _ in chain:
-        item = caustic_path.add()
+        item = caustic.caustic_info.path.add()
         item.object = obj
         item.kind = kind
+
+    # add material
+    mat = material.get_caustic_material(lightsheet.parent, parent_obj)
+    caustic.data.materials.append(mat)
 
     return caustic
 

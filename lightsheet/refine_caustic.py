@@ -34,7 +34,7 @@ import bmesh
 import bpy
 from bpy.types import Operator
 
-from lightsheet import material, trace, utils
+from lightsheet import trace, utils
 
 
 class LIGHTSHEET_OT_refine_caustic(Operator):
@@ -71,9 +71,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for caustics
-        objects = context.selected_objects
-        if objects:
-            for obj in objects:
+        if context.selected_objects:
+            for obj in context.selected_objects:
                 caustic_info = obj.caustic_info
                 if caustic_info.path and not caustic_info.finalized:
                     return True
@@ -115,28 +114,31 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
-        # parameters for tracing
-        depsgraph = context.view_layer.depsgraph
-
         # set relative tolerance
         if self.adaptive_subdivision:
             relative_tolerance = self.error_threshold
         else:
             relative_tolerance = None
 
-        num_verts_old, num_verts_now = 0, 0
-        tic = perf_counter()
+        # gather caustics that should be refined, this must be done before we
+        # hide caustics and lightsheets because hiding will deselect objects
+        refinable_caustics = []
         for obj in context.selected_objects:
-            # skip non-refinable objects
-            if not obj.caustic_info.path or obj.caustic_info.finalized:
-                continue
+            # skip if not caustic (no caustic path) or is finalized
+            if obj.caustic_info.path and not obj.caustic_info.finalized:
+                refinable_caustics.append(obj)
 
-            # refine
-            num_verts_old += len(obj.data.vertices)
-            refine_caustic(obj, depsgraph, relative_tolerance, self.span_faces,
-                           self.grow_boundary)
-            num_verts_now += len(obj.data.vertices)
-        toc = perf_counter()
+        # refine caustics
+        num_verts_old, num_verts_now = 0, 0
+        with trace.configure_for_trace(context) as depsgraph:
+            tic = perf_counter()
+            for caustic in refinable_caustics:
+                num_verts_old += len(caustic.data.vertices)
+                refine_caustic(caustic, depsgraph, relative_tolerance,
+                               self.span_faces,
+                               self.grow_boundary)
+                num_verts_now += len(caustic.data.vertices)
+            toc = perf_counter()
 
         # report statistics
         v_stats = f"Added {num_verts_now-num_verts_old:,} verts"
@@ -175,10 +177,6 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
 
     # coordinates of source position on lighsheet
     get_sheet, _ = utils.setup_sheet_property(caustic_bm)
-
-    # make sure caches are clean
-    trace.cache_clear()
-    material.cache_clear()
 
     # gather all edges that we have to split
     refine_edges = dict()  # {edge: sheet pos of midpoint}
@@ -298,10 +296,6 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
     utils.bmesh_delete_loose(caustic_bm)
     new_verts = [vert for vert in new_verts if vert.is_valid]
     assert all(data is not None for data in sheet_to_data.values())
-
-    # cleanup generated meshes and caches
-    trace.cache_clear()
-    material.cache_clear()
 
     # gather the vertices whose neighbours have changed (to recalculate
     # squeeze), the edges that we may split next and the faces where we
