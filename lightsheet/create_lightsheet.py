@@ -103,19 +103,13 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         toc = perf_counter()
 
         # get or setup collection for lightsheets and add lightsheet object
-        coll_name = f"Lightsheets in {context.scene.name}"
-        coll = context.scene.collection.children.get(coll_name)
-        if coll is None:
-            coll = bpy.data.collections.get(coll_name)
-            if coll is None:
-                coll = bpy.data.collections.new(coll_name)
-            context.scene.collection.children.link(coll)
+        coll = utils.verify_collection_for_scene(context.scene, "lightsheets")
         coll.objects.link(lightsheet)
 
         # report statistics
-        v_stats = "{:,} vertices".format(len(lightsheet.data.vertices))
-        f_stats = "{:,} faces".format(len(lightsheet.data.polygons))
-        t_stats = "{:.3f}s".format((toc - tic))
+        v_stats = f"{len(lightsheet.data.vertices):,} vertices"
+        f_stats = f"{len(lightsheet.data.polygons):,} faces"
+        t_stats = f"{toc - tic:.1f}s"
         self.report({"INFO"}, f"Created {v_stats} and {f_stats} in {t_stats}")
 
         return {"FINISHED"}

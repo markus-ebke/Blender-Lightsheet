@@ -61,9 +61,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         # operator makes sense only for lightsheets (must have light as parent)
         obj = context.object
         if obj is not None and obj.type == 'MESH':
-            parent = obj.parent
-            return parent is not None and parent.type == 'LIGHT'
-
+            return obj.parent is not None and obj.parent.type == 'LIGHT'
         return False
 
     def invoke(self, context, event):
@@ -72,25 +70,19 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
+        # verify lightsheet
+        lightsheet = verify_object_is_lightsheet(context.object, context.scene)
+
         # raytrace lightsheet
         with trace.configure_for_trace(context) as depsgraph:
             tic = perf_counter()
-            lightsheet = verify_object_is_lightsheet(context.object)
             caustics = trace_lightsheet(lightsheet, depsgraph,
                                         self.max_bounces,
                                         self.dismiss_empty_caustics)
             toc = perf_counter()
 
-        # get or setup collection for caustics
-        coll_name = f"Caustics in {context.scene.name}"
-        coll = context.scene.collection.children.get(coll_name)
-        if coll is None:
-            coll = bpy.data.collections.get(coll_name)
-            if coll is None:
-                coll = bpy.data.collections.new(coll_name)
-            context.scene.collection.children.link(coll)
-
-        # add the fresh caustics to caustic collection
+        # get or setup collection for caustics and add objects
+        coll = utils.verify_collection_for_scene(context.scene, "caustics")
         for obj in caustics:
             coll.objects.link(obj)
 
@@ -105,13 +97,10 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by trace lightsheet operator
 # -----------------------------------------------------------------------------
-def verify_object_is_lightsheet(obj):
-    """Setup the given object so that it can be used as a lightsheet."""
-    assert obj is not None and isinstance(obj, bpy.types.Object)
-
-    # verify name
-    if "lightsheet" not in obj.name.lower():
-        obj.name = f"Lightsheet {obj.name}"
+def verify_object_is_lightsheet(obj, scene):
+    """Ensure that the given object can be used as a lightsheet."""
+    assert obj is not None and obj.type == 'MESH'
+    assert obj.parent is not None and obj.parent.type == 'LIGHT'
 
     # verify coordinate layers
     bm = bmesh.new()
@@ -120,6 +109,11 @@ def verify_object_is_lightsheet(obj):
     bmesh.ops.triangulate(bm, faces=bm.faces)  # ensure triangles
     bm.to_mesh(obj.data)
     bm.free()
+
+    # make sure that lightsheet belongs to the right collection
+    ls_coll = utils.verify_collection_for_scene(scene, "lightsheets")
+    if obj.name not in ls_coll or obj is not ls_coll.get(obj.name):
+        ls_coll.objects.link(obj)
 
     return obj
 

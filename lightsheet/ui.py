@@ -49,20 +49,31 @@ class LIGHTSHEET_PT_tools(Panel):
         col.operator("lightsheet.refine", icon='MOD_MULTIRES')
         col.operator("lightsheet.finalize", icon='OUTPUT')
 
-        # info about active object
-        obj = context.object
-        if obj:
-            display_obj_info(obj, layout.box())
+        # info about the active object and selected objects
+        box = layout.box()
+        if context.object:
+            ls_coll_name = f"Lightsheets in {context.scene.name}"
+            ls_coll = context.scene.collection.children.get(ls_coll_name)
+            display_obj_info(context.object, ls_coll, box)
+        box.label(text=f"{len(context.selected_objects)} objects are selected")
 
 
-def display_obj_info(obj, layout):
+def display_obj_info(obj, lightsheet_collection, layout):
     """Draw info and stats about lightsheet related objects."""
+    def is_lighsheet(obj):
+        if lightsheet_collection is None:
+            return False
+
+        if obj.name in lightsheet_collection.objects:
+            if obj is lightsheet_collection.objects.get(obj.name):
+                return True
+        return False
+
     layout.label(text="Active object:")
     layout.label(text=f"{obj.name} ({obj.type})", icon='OBJECT_DATA')
     if obj.type == 'LIGHT':
         # object is light, does it have a lightsheet?
-        has_lightsheet = any("lightsheet" in child.name.lower()
-                             for child in obj.children)
+        has_lightsheet = any(is_lighsheet(child) for child in obj.children)
         if has_lightsheet:
             layout.label(text="Light has a lightsheet", icon='CHECKBOX_HLT')
         else:
@@ -71,7 +82,7 @@ def display_obj_info(obj, layout):
         # object is mesh, is it a lightsheet, caustic or parent of caustic?
         if obj.parent is not None and obj.parent.type == 'LIGHT':
             # object is or can be lightsheet
-            verb = "is" if "lightsheet" in obj.name.lower() else "can be"
+            verb = "is" if is_lighsheet(obj) else "can be"
             layout.label(text=f"Object {verb} lightsheet",
                          icon='LIGHTPROBE_PLANAR')
         elif obj.caustic_info.path:
@@ -116,7 +127,7 @@ class LIGHTSHEET_PT_caustic(Panel):
 
         # display mesh stats
         data = caustic.data
-        box.label(text="Info about mesh:")
+        box.label(text="Info about active mesh:")
         box.label(text=f"Verts: {len(data.vertices):,}", icon='VERTEXSEL')
         box.label(text=f"Edges: {len(data.edges):,}", icon='EDGESEL')
         box.label(text=f"Faces: {len(data.polygons):,}", icon='FACESEL')

@@ -21,6 +21,8 @@
 """Helper functions used by more than one operator.
 
 - bmesh_delete_loose (bmesh reimplementation of bpy.ops.mesh.delete_loose)
+- verify_collection_for_scene (used by create_lightsheet, trace_lightsheet and
+    visualize_raypath)
 - verify_lightsheet_layers (used by create_lightsheet and trace_lightsheet)
 - chain_complexity (used by trace_lightsheet and refine_caustics)
 - setup_sheet_property (used by trace_lightsheet and refine_caustics)
@@ -29,6 +31,7 @@
 """
 
 import bmesh
+import bpy
 from mathutils import Matrix, Vector
 from mathutils.geometry import area_tri
 
@@ -44,6 +47,25 @@ def bmesh_delete_loose(bm, use_verts=True, use_edges=True):
     if use_verts:
         loose_verts = [vert for vert in bm.verts if not vert.link_edges]
         bmesh.ops.delete(bm, geom=loose_verts, context='VERTS')
+
+
+def verify_collection_for_scene(scene, objects="lightsheets"):
+    """Get or create the lightsheets/caustics collection for the scene."""
+    coll_name = f"{objects.capitalize()} in {scene.name}"
+
+    # see if we can find the collection in the scene
+    coll = scene.collection.children.get(coll_name)
+    if coll is None:
+        # collection not in scene, is it anywhere in the file?
+        coll = bpy.data.collections.get(coll_name)
+        if coll is None:
+            # create a new collection
+            coll = bpy.data.collections.new(coll_name)
+
+        # don't forget to link to scene
+        scene.collection.children.link(coll)
+
+    return coll
 
 
 def verify_lightsheet_layers(bm):

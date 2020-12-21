@@ -122,11 +122,14 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 
         # gather caustics that should be refined, this must be done before we
         # hide caustics and lightsheets because hiding will deselect objects
+        skipped = 0
         refinable_caustics = []
         for obj in context.selected_objects:
             # skip if not caustic (no caustic path) or is finalized
             if obj.caustic_info.path and not obj.caustic_info.finalized:
                 refinable_caustics.append(obj)
+            else:
+                skipped += 1
 
         # refine caustics
         num_verts_old, num_verts_now = 0, 0
@@ -142,8 +145,9 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 
         # report statistics
         v_stats = f"Added {num_verts_now-num_verts_old:,} verts"
-        t_stats = f"{toc-tic:.3f}s"
-        self.report({"INFO"}, f"{v_stats} in {t_stats}")
+        s_stats = f"skipped {skipped} objects"
+        t_stats = f"{toc-tic:.1f}s"
+        self.report({"INFO"}, f"{v_stats} and {s_stats} in {t_stats}")
 
         return {"FINISHED"}
 
@@ -261,7 +265,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
     # ensure triangles
     triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
     if triang_less:
-        print(f"We have to triangulate {len(triang_less)} faces")
+        print(f"Lightsheet: We had to triangulate {len(triang_less)} faces")
         bmesh.ops.triangulate(caustic_bm, faces=triang_less)
 
     # verify newly added vertices

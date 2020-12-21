@@ -125,8 +125,8 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         # report statistics
         f_stats = f"Finalized {finalized}"
         d_stats = f"deleted {deleted}"
-        s_stats = f"skipped {skipped}"
-        t_stats = "{:.3f}s".format(toc-tic)
+        s_stats = f"skipped {skipped} objects"
+        t_stats = f"{toc-tic:.1f}s"
         message = f"{f_stats}, {d_stats} and {s_stats} in {t_stats}"
         self.report({"INFO"}, message)
 

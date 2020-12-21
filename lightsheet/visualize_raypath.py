@@ -83,12 +83,15 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
             tic = perf_counter()
             trails = gather_trails(obj, depsgraph)
             path_obj = convert_trails_to_objects(trails, obj)
-            context.scene.collection.objects.link(path_obj)
             toc = perf_counter()
+
+        # add path to caustic collection
+        coll = utils.verify_collection_for_scene(context.scene, "caustics")
+        coll.objects.link(path_obj)
 
         # report statistics
         v_stats = f"Retraced {len(trails):,} verts"
-        t_stats = f"{toc-tic:.3f}s"
+        t_stats = f"{toc-tic:.1f}s"
         self.report({"INFO"}, f"{v_stats} in {t_stats}")
 
         return {"FINISHED"}

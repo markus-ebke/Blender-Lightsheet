@@ -46,7 +46,7 @@ if "bpy" in locals():
     importlib.reload(properties)
     importlib.reload(ui)
 
-    print("lighsheet reloaded")
+    print("Lighsheet: Addon reloaded")
 else:
     from lightsheet import (create_lightsheet,
                             trace_lightsheet,
@@ -56,7 +56,7 @@ else:
                             properties,
                             ui)
 
-    print("lightsheet loaded")
+    print("Lightsheet: Addon loaded")
 
 import bpy
 from bpy.utils import register_class, unregister_class
@@ -84,12 +84,16 @@ def register():
     bpy.types.Object.caustic_info = bpy.props.PointerProperty(
         type=properties.CausticInfo)
 
+    print("Lightsheet: Addon registered")
+
 
 def unregister():
     del bpy.types.Object.caustic_info
 
     for cls in reversed(classes):
         unregister_class(cls)
+
+    print("Lightsheet: Addon unregistered")
 
 
 if __name__ == "__main__":

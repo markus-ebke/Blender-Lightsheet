@@ -314,7 +314,7 @@ def setup_scalar_node(node, from_socket_identifier=None):
                 blend_clamped = max(blend, 1 - 1e-5)  # blend < 1
                 return 1 - pow(dot, 0.5 / (1 - blend_clamped))
     else:  # none of the above
-        print(f"scalar node {node.type} not supported")
+        print(f"Lightsheet: Scalar node {node.type} not supported")
 
         def fac(incoming, normal):
             return 0.0
@@ -421,12 +421,6 @@ def get_material_shader(mat):
     """
     # check if material is valid and uses nodes
     if mat is None or not mat.use_nodes:
-        if mat is None:
-            print("default material: diffuse")
-        else:
-            assert not mat.use_nodes
-            print(f"{mat.name}: material doesn't use nodes => diffuse")
-
         # default material: diffuse, no caustic rays
         return (diffuse_surface_shader, None)
 
@@ -439,7 +433,6 @@ def get_material_shader(mat):
 
     if outnode is None:
         # no output node: invalid material
-        print(f"{mat.name}: no active output node => black")
         return (invalid_surface_shader, None)
 
     # find linked shader for volume, if any
@@ -456,7 +449,6 @@ def get_material_shader(mat):
     # find linked shader for surface (if none: invalid)
     surface_links = outnode.inputs['Surface'].links
     if not surface_links:
-        print(f"{mat.name}: no connected surface shader node => black")
         return (invalid_surface_shader, volume_params)
 
     # get node and setup shader for surface
@@ -464,19 +456,15 @@ def get_material_shader(mat):
     setup = setup_node_interactions.get(node.type)
     if setup is None:
         # node type not in dict, i.e. we don't know how to handle this node
-        print(f"{mat.name}: don't know {node.type} => black")
         return (invalid_surface_shader, volume_params)
 
     # setup surface shader
     surface_shader = setup(node)
     if surface_shader is None:
         # e.g. rough glass/glossy => no tracing, no diffuse caustic
-        print(f"{mat.name}: can't handle settings of {node.type} => black")
         return (invalid_surface_shader, None)
 
     # surface and volume setup complete
-    print(f"{mat.name}: setup {node.type} shader")
-
     return (surface_shader, volume_params)
 
 
