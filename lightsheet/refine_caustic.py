@@ -214,7 +214,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
                 refine_edges[edge] = sheet_mid
             else:
                 # projected midpoint with offset
-                position = cdata.location + 1e-4 * cdata.normal
+                position = cdata.location + 1e-4 * cdata.perp
                 mid_target = world_to_caustic @ position
 
                 # calc error and whether we should keep the edge
@@ -291,7 +291,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
             del sheet_to_data[sheet_key]
         else:
             # set correct vertex coordinates and face index
-            position = cdata.location + 1e-4 * cdata.normal
+            position = cdata.location + 1e-4 * cdata.perp
             vert.co = world_to_caustic @ position
             vert[face_index] = cdata.face_index
 

@@ -106,13 +106,15 @@ def verify_object_is_lightsheet(obj, scene):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     utils.verify_lightsheet_layers(bm)
-    bmesh.ops.triangulate(bm, faces=bm.faces)  # ensure triangles
+    bmesh.ops.triangulate(bm, faces=bm.faces)  # must be triangle mesh
     bm.to_mesh(obj.data)
     bm.free()
 
-    # make sure that lightsheet belongs to the right collection
+    # make sure that lightsheet belongs to the right collection, otherwise we
+    # can't hide it for tracing
     ls_coll = utils.verify_collection_for_scene(scene, "lightsheets")
-    if obj.name not in ls_coll or obj is not ls_coll.get(obj.name):
+    if (obj.name not in ls_coll.objects
+            or obj is not ls_coll.objects.get(obj.name)):
         ls_coll.objects.link(obj)
 
     return obj
@@ -127,8 +129,8 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
     # coordinates of source position on lighsheet
     get_sheet, _ = utils.setup_sheet_property(lightsheet_bm)
 
-    # traced = {chain: {sheet_pos: CausticData}}
-    traced = defaultdict(dict)
+    # trace rays and record results
+    traced = defaultdict(dict)  # traced = {chain: {sheet_pos: CausticData}}
     first_ray = trace.setup_lightsheet_first_ray(lightsheet)
     for vert in lightsheet_bm.verts:
         sheet_pos = get_sheet(vert)
@@ -150,7 +152,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
     for chain, sheet_to_data in traced_sorted:
         caustic = convert_caustic_to_objects(lightsheet, chain, sheet_to_data)
 
-        # if wanted delete empty caustics
+        # if wanted by user delete empty caustics
         if dismiss_empty and len(caustic.data.polygons) == 0:
             bpy.data.objects.remove(caustic)
         else:
@@ -225,7 +227,7 @@ def setup_caustic_bmesh(sheet_to_data):
     caustic_bm.loops.layers.color.new("Caustic Tint")
 
     # create uv-layer for transplanted coordinates (if any)
-    if any(data.uv is not None for data in sheet_to_data.values()):
+    if any(cdata.uv is not None for cdata in sheet_to_data.values()):
         # assume that all data objects have uv coordinates
         caustic_bm.loops.layers.uv.new("UVMap")
 
@@ -245,15 +247,15 @@ def setup_caustic_bmesh(sheet_to_data):
     caustic_bm.loops.layers.uv.new("Lightsheet XZ")
 
     # create vertices and given positions and set sheet coordinates
-    for sheet_pos, data in sheet_to_data.items():
-        assert data is not None, sheet_pos
+    for sheet_pos, cdata in sheet_to_data.items():
+        assert cdata is not None, sheet_pos
 
         # create caustic vertex, offset so that caustic wraps around object
-        position = data.location + 1e-4 * data.normal
+        position = cdata.location + 1e-4 * cdata.perp
         vert = caustic_bm.verts.new(position)
 
         # setup vertex data
-        vert[face_index] = data.face_index
+        vert[face_index] = cdata.face_index
         vert[sheet_x], vert[sheet_y], vert[sheet_z] = sheet_pos
 
     return caustic_bm

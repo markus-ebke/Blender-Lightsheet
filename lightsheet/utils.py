@@ -227,19 +227,19 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
         for loop in face.loops:
             # get data for this vertex (if any)
             sheet_key = tuple(get_sheet(loop.vert))
-            data = sheet_to_data.get(sheet_key)
-            if data is not None:
+            cdata = sheet_to_data.get(sheet_key)
+            if cdata is not None:
                 # sheet position to uv-coordinates
                 sx, sy, sz = sheet_key
                 loop[uv_sheet_xy].uv = (sx, sy)
                 loop[uv_sheet_xz].uv = (sx, sz)
 
                 # set face data
-                loop[color_layer] = tuple(data.color) + (1,)
+                loop[color_layer] = tuple(cdata.color) + (1,)
                 if uv_layer is not None:
-                    assert data.uv is not None, uv_layer.name
-                    loop[uv_layer].uv = data.uv
-                vert_normal_sum += data.normal
+                    assert cdata.uv is not None, uv_layer.name
+                    loop[uv_layer].uv = cdata.uv
+                vert_normal_sum += cdata.perp
 
         # if face normal does not point in the same general direction as
         # the averaged vertex normal, then flip the face normal

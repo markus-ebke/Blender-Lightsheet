@@ -72,14 +72,14 @@ Link.__doc__ = """One link in the chain of interactions of a ray.
     """
 
 # organize caustic vertex info
-CausticData = namedtuple("CausticData", ["location", "color", "uv", "normal",
+CausticData = namedtuple("CausticData", ["location", "color", "uv", "perp",
                                          "face_index"])
 CausticData.__doc__ = """Data for a caustic vertex at the specified location.
 
     location (mathutils.Vector): location in scene space of final point
     color (mathutils.Color): color of caustic at the final point
     uv (mathutils.Vector): uv-coordinates on the hit object (may be None)
-    normal (mathutils.Vector): points away from the hit face (away from front
+    perp (mathutils.Vector): points away from the hit face (away from front
         or backside of face depending on the side that was hit)
     face_index: index of hit face from the mesh of the hit object
     """
@@ -112,14 +112,14 @@ def setup_lightsheet_first_ray(lightsheet):
 
         # parallel projection in sun direction
         def first_ray(sheet_pos):
-            ray_origin = sheet_to_world @ Vector(sheet_pos)
+            ray_origin = sheet_to_world @ sheet_pos
             return Ray(ray_origin, minus_z_axis, white, tuple())
     else:
         origin.freeze()  # will use as default value, should be immutable
 
         # project from origin of lightsheet coordinate system
         def first_ray(sheet_pos):
-            ray_direction = sheet_to_world @ Vector(sheet_pos) - origin
+            ray_direction = sheet_to_world @ sheet_pos - origin
             ray_direction.normalize()
             return Ray(origin, ray_direction, white, tuple())
 
