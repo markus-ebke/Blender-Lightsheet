@@ -79,8 +79,9 @@ CausticData.__doc__ = """Data for a caustic vertex at the specified location.
     location (mathutils.Vector): location in scene space of final point
     color (mathutils.Color): color of caustic at the final point
     uv (mathutils.Vector): uv-coordinates on the hit object (may be None)
-    perp (mathutils.Vector): points away from the hit face (away from front
-        or backside of face depending on the side that was hit)
+    perp (mathutils.Vector): direction in scene space pointing perpendicularly
+        away from the hit face (away from the front- or the backside depending
+        on from which side the face was hit)
     face_index: index of hit face from the mesh of the hit object
     """
 
@@ -161,12 +162,12 @@ def configure_for_trace(context):
 # -----------------------------------------------------------------------------
 def trace_scene(ray, depsgraph, max_bounces):
     """Recursively trace a ray through the scene, add data to traced dict."""
-    result = []
+    caustic_data = []
     stack = [ray]  # implement recursion via stack
     while stack:
         ray_origin, ray_direction, color, old_chain = stack.pop()
-        obj, location, normal, face_index, matrix = scene_raycast(
-            ray_origin, ray_direction, depsgraph)
+        res = scene_raycast(ray_origin, ray_direction, depsgraph)
+        obj, location, smooth_normal, face_normal, face_index, matrix = res
 
         # if we hit the background we reached the end of the path
         if obj is None:
@@ -184,7 +185,8 @@ def trace_scene(ray, depsgraph, max_bounces):
         # determine surface interactions from material (i.e. does the ray
         # continue and if yes, how?)
         surface_shader, volume_params = material.get_material_shader(mat)
-        for kind, new_direction, tint in surface_shader(ray_direction, normal):
+        for interaction in surface_shader(ray_direction, smooth_normal):
+            kind, new_direction, tint = interaction
             # diffuse interactions will show reflective or refractive
             # caustics, non-diffuse interactions will add new rays if the new
             # path is not longer than the bounce limit
@@ -198,21 +200,21 @@ def trace_scene(ray, depsgraph, max_bounces):
                     # setup vector perpendicular to face (will be used to
                     # offset caustic), if we hit the backside use reversed
                     # normal
-                    if ray_direction.dot(face.normal) < 0:
-                        perp = face.normal
+                    if ray_direction.dot(face_normal) < 0:
+                        perp = face_normal
                     else:
-                        perp = -face.normal
+                        perp = -face_normal
 
                     # setup data and add to result
                     chain = old_chain + (Link(obj, kind, None),)
                     cdata = CausticData(location, color, uv, perp, face_index)
-                    result.append((chain, cdata))
-            elif len(old_chain) < max_bounces:
+                    caustic_data.append((chain, cdata))
+            elif len(old_chain) <= max_bounces:
                 assert new_direction is not None
 
                 # move the starting point a safe distance away from the object
-                offset = copysign(1e-5, new_direction.dot(face.normal))
-                new_origin = location + offset * face.normal
+                offset = copysign(1e-5, new_direction.dot(face_normal))
+                new_origin = location + offset * face_normal
 
                 # compute volume absorption from previous interaction
                 volume = (1.0, 1.0, 1.0)
@@ -230,7 +232,7 @@ def trace_scene(ray, depsgraph, max_bounces):
                 new_color = Color(mult)
 
                 # extend path of ray
-                if new_direction.dot(normal) < 0:
+                if new_direction.dot(face_normal) < 0:
                     # consider volume absorption if headed inside
                     new_chain = old_chain + (Link(obj, kind, volume_params),)
                 else:
@@ -240,7 +242,7 @@ def trace_scene(ray, depsgraph, max_bounces):
                 # trace new ray
                 new_ray = Ray(new_origin, new_direction, new_color, new_chain)
                 stack.append(new_ray)
-    return result
+    return caustic_data
 
 
 def trace_along_chain(ray, depsgraph, chain_to_follow):
@@ -255,8 +257,8 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
     # trace along the given chain of interactions
     for obj, kind_to_follow, _ in chain_to_follow:
         ray_origin, ray_direction, color, old_chain = ray
-        hit_obj, location, normal, face_index, matrix = scene_raycast(
-            ray_origin, ray_direction, depsgraph, obj)
+        res = scene_raycast(ray_origin, ray_direction, depsgraph, obj)
+        hit_obj, location, smooth_normal, face_normal, face_index, matrix = res
         trail.append(location)
 
         # if we missed the object, the caustic will be empty at this position
@@ -277,7 +279,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         # interaction that follows the path of the caustic
         surface_shader, volume_params = material.get_material_shader(mat)
         found_intersection = None
-        for interaction in surface_shader(ray_direction, normal):
+        for interaction in surface_shader(ray_direction, smooth_normal):
             if interaction.kind == kind_to_follow:
                 found_intersection = interaction
                 break
@@ -294,10 +296,10 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
 
             # setup vector perpendicular to face (will be used to offset
             # caustic), if we hit the backside use reversed normal
-            if ray_direction.dot(face.normal) < 0:
-                perp = face.normal
+            if ray_direction.dot(face_normal) < 0:
+                perp = face_normal
             else:
-                perp = -face.normal
+                perp = -face_normal
 
             # setup data
             chain = old_chain + (Link(obj, kind, None),)
@@ -306,8 +308,8 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
             assert new_direction is not None
 
             # move the starting point a safe distance away from the object
-            offset = copysign(1e-5, new_direction.dot(face.normal))
-            new_origin = location + offset * face.normal
+            offset = copysign(1e-5, new_direction.dot(face_normal))
+            new_origin = location + offset * face_normal
 
             # compute volume absorption from previous interaction
             volume = (1.0, 1.0, 1.0)
@@ -325,7 +327,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
             new_color = Color(mult)
 
             # extend path of ray
-            if new_direction.dot(normal) < 0:
+            if new_direction.dot(face_normal) < 0:
                 # consider volume absorption if headed inside
                 new_chain = old_chain + (Link(obj, kind, volume_params),)
             else:
@@ -358,18 +360,22 @@ def scene_raycast(ray_origin, ray_direction, depsgraph, obj=None):
             depsgraph=depsgraph,
             origin=ray_origin,
             direction=ray_direction)
-    success, location, normal, face_index, hit_obj, matrix = result
+    success, location, face_normal, face_index, hit_obj, matrix = result
 
     # check if hit is valid
     if not success or (obj is not None and hit_obj is not obj):
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
-    # calculate (smooth) normal
-    location_obj = matrix.inverted() @ location
-    normal_obj = calc_normal(hit_obj, depsgraph, face_index, location_obj)
-    normal = (matrix @ (location_obj + normal_obj) - location).normalized()
+    # calculate smoothed normal (!= true normal if material uses bump mapping)
+    # note that normals transform differently than position vectors because
+    # scaling can mess up the perpendicularness of the normal, explanation:
+    # https://computergraphics.stackexchange.com/q/1502
+    normal_local = calc_normal(hit_obj, depsgraph, face_index,
+                               point=matrix.inverted() @ location)
+    smooth_normal = matrix.inverted().transposed().to_3x3() @ normal_local
+    smooth_normal.normalize()
 
-    return hit_obj, location, normal, face_index, matrix
+    return hit_obj, location, smooth_normal, face_normal, face_index, matrix
 
 
 # -----------------------------------------------------------------------------
@@ -402,12 +408,14 @@ def calc_normal(obj, depsgraph, face_index, point):
             # found triangle, note that tri and v1, v2, v3 are defined now
             break
 
-    # calculate smooth normal at given point, interpolate via barycentric
-    # transformation, note that interpolated vector might not be normalized
+    # calculate smooth normal at given point via barycentric transformation,
+    # note that the interpolated vector is (in general) not normalized, but
+    # probably close to length 1 (if normals at vertices don't differ too much)
     n1, n2, n3 = vert_normal[tri[0]], vert_normal[tri[1]], vert_normal[tri[2]]
     normal = barycentric_transform(point, v1, v2, v3, n1, n2, n3)
 
-    return normal.normalized()
+    # return normal.normalized()
+    return normal  # normalized not needed if we transform and normalize later
 
 
 def calc_uv(obj, depsgraph, face_index, point):

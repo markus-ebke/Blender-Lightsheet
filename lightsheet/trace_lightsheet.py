@@ -47,12 +47,13 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     max_bounces: bpy.props.IntProperty(
-        name="Max Bounces", description="Maximum number of light bounces",
+        name="Max Bounces",
+        description="Maximum number of light bounces to a diffuse surface",
         default=4, min=0
     )
     dismiss_empty_caustics: bpy.props.BoolProperty(
         name="Dismiss empty caustics",
-        description="Don't create caustics for raypaths that produce no faces",
+        description="Don't create caustics that would end up with no faces",
         default=True
     )
 
@@ -105,7 +106,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
             coll.objects.link(obj)
 
         # report statistics
-        c_stats = f"{len(caustics)} caustic(s)"
+        c_stats = f"{len(all_caustics)} caustic(s)"
         t_stats = f"{toc - tic:.1f}s"
         self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
 
