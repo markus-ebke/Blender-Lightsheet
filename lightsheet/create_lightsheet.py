@@ -55,62 +55,41 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for light objects
-        return context.object is not None and context.object.type == 'LIGHT'
+        return all(obj.type == 'LIGHT' for obj in context.selected_objects)
 
     def invoke(self, context, event):
-        obj = context.object
-
         # cancel operator for area lights
-        light_type = obj.data.type
-        if light_type not in {'SUN', 'SPOT', 'POINT'}:
-            message = f"{light_type.capitalize()} lights are not supported"
-            self.report({'ERROR'}, message)
-            return {'CANCELLED'}
+        for obj in context.selected_objects:
+            assert obj.type == 'LIGHT', (obj, obj.type)  # poll failed us!
+            light_type = obj.data.type
+            if light_type not in ('SUN', 'SPOT', 'POINT'):
+                reasons = f"{light_type.lower()} lights are not supported"
+                msg = f"Can't create sheet for '{obj.name}' because {reasons}!"
+                self.report({"ERROR"}, msg)
+                return {'CANCELLED'}
 
         # set resolution via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
-        # build lightsheet around active object (should be a light source)
-        light = context.object
-
-        # setup lightsheet bmesh, type of lightsheet depends on type of light
-        light_type = light.data.type
-        assert light_type in {'SUN', 'SPOT', 'POINT'}, light.data.type
-
+        # create lightsheets for every selected object (will all be lamps)
         tic = perf_counter()
-        if light_type == 'SUN':
-            # sun gets a square grid, because we don't know anything better
-            sidelength = 2  # scale by hand if not the right size
-            bm = create_bmesh_square(sidelength, self.resolution)
-        elif light_type == 'SPOT':
-            # intersect cone of spot with shifted plane => circle with
-            # radius = tan(halfangle) (because size of circle = sin(...) and
-            # shift = cos(...), but we want shift = 1, so divide by cos(...)
-            # and radius becomes sin / cos = tan)
-            angle = light.data.spot_size  # between 0° and 180°, but in radians
-            radius = min(tan(angle / 2), 10)  # restrict for angles near 180°
-            bm = create_bmesh_disk(radius, self.resolution)
-
-            # shift circle to inside of cone
-            for vert in bm.verts:
-                vert.co.z = -1
-        else:
-            # lightsheet that surrounds the point light
-            bm = create_bmesh_sphere(self.resolution)
-        lightsheet = convert_bmesh_to_lightsheet(bm, light)
+        lightsheets = []
+        for obj in context.selected_objects:
+            lightsheet = setup_lightsheet(obj, self.resolution)
+            lightsheets.append(lightsheet)
         toc = perf_counter()
 
-        # get or setup collection for lightsheets and add lightsheet object
+        # add lightsheets to the right scene collection
         coll = utils.verify_collection_for_scene(context.scene, "lightsheets")
-        coll.objects.link(lightsheet)
+        for obj in lightsheets:
+            coll.objects.link(obj)
 
         # report statistics
-        v_stats = f"{len(lightsheet.data.vertices):,} vertices"
-        f_stats = f"{len(lightsheet.data.polygons):,} faces"
+        c_stats = f"{len(lightsheets)} lightsheet(s)"
         t_stats = f"{toc - tic:.1f}s"
-        self.report({"INFO"}, f"Created {v_stats} and {f_stats} in {t_stats}")
+        self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
 
         return {"FINISHED"}
 
@@ -118,6 +97,36 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by create lightsheet operator
 # -----------------------------------------------------------------------------
+def setup_lightsheet(light, resolution):
+    """Setup lightsheet object, type of lightsheet depends on type of light."""
+    assert light.type == 'LIGHT', (light, light.type)  # poll failed us!
+
+    light_type = light.data.type
+    if light_type == 'SUN':
+        # sun gets a square grid, because we don't know anything better
+        sidelength = 2  # scale by hand if not the right size
+        bm = create_bmesh_square(sidelength, resolution)
+    elif light_type == 'SPOT':
+        # intersect cone of spot with shifted plane => circle with
+        # radius = tan(halfangle) (because size of circle = sin(...) and
+        # shift = cos(...), but we want shift = 1, so divide by cos(...)
+        # and radius becomes sin / cos = tan)
+        angle = light.data.spot_size  # between 0° and 180°, but in radians
+        radius = min(tan(angle / 2), 10)  # restrict for angles near 180°
+        bm = create_bmesh_disk(radius, resolution)
+
+        # shift circle to inside of cone
+        for vert in bm.verts:
+            vert.co.z = -1
+    else:
+        assert light_type == 'POINT', (light, light_type)  # invoke failed us!
+        # lightsheet that surrounds the point light
+        bm = create_bmesh_sphere(resolution)
+    lightsheet = convert_bmesh_to_lightsheet(bm, light)
+
+    return lightsheet
+
+
 def create_bmesh_square(sidelength, resolution):
     """Create bmesh for a square filled with triangles."""
     # horizontal and vertical strides, note that odd horizontal strips are

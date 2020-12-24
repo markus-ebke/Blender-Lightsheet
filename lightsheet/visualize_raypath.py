@@ -43,36 +43,41 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
     def poll(cls, context):
         # operator makes sense only for caustics
         obj = context.object
-        if obj is not None and obj.caustic_info.path:
-            return True
-        return False
+        return obj is not None and obj.caustic_info.path
 
     def invoke(self, context, event):
         obj = context.object
         assert obj is not None
 
-        # abort if caustic has no lighsheet
+        # cancel with error message
+        def cancel(obj, reasons):
+            msg = f"Cannot visualize raypath for {obj.name} because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
+
+        # check that caustic has a lightsheet
         lightsheet = obj.caustic_info.lightsheet
         if lightsheet is None:
-            reasons = "it has no lightsheet"
-            msg = f"Cannot visualize {obj.name} because {reasons}!"
-            self.report({'ERROR'}, msg)
-            return {'CANCELLED'}
+            return cancel(obj, reasons="it has no lightsheet")
 
-        # count selected vertices and abort if no vertices were selected
+        # check that light (parent of lightsheet) is valid
+        light = lightsheet.parent
+        if light is None or light.type != 'LIGHT':
+            return cancel(obj, reasons="lightsheet parent is not a light")
+
+        # check that light type is supported
+        light_type = light.data.type
+        if light_type not in {'SUN', 'SPOT', 'POINT'}:
+            reasons = f"{light_type.capitalize()} lights are not supported"
+            return cancel(obj, reasons)
+
+        # count selected vertices and show confirmation dialog
         self.num_verts = sum(1 for vert in obj.data.vertices if vert.select)
-        if self.num_verts == 0:
-            msg = ("Please select some vertices for which you want to "
-                   "visualize the raypath!")
-            self.report({'ERROR'}, msg)
-            return {'CANCELLED'}
-
-        # continue and draw dialog box
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):
         # draw info about selected vertices for user to confirm
-        txt = f"Visualize raypath for {self.num_verts:,} vertices?"
+        txt = f"Visualize raypath for {self.num_verts:,} selected vertices?"
         self.layout.label(text=txt)
 
     def execute(self, context):

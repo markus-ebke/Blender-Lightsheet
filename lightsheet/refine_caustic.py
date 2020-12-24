@@ -71,43 +71,38 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for caustics
-        if context.selected_objects:
-            for obj in context.selected_objects:
-                caustic_info = obj.caustic_info
-                if caustic_info.path and not caustic_info.finalized:
-                    return True
-        return False
+        return all(obj.caustic_info.path for obj in context.selected_objects)
 
     def invoke(self, context, event):
-        assert context.selected_objects
-        for obj in context.selected_objects:
-            # skip non-refinable objects
-            if not obj.caustic_info.path or obj.caustic_info.finalized:
-                continue
+        # cancel with error message
+        def cancel(obj, reasons):
+            msg = f"Can't refine '{obj.name}' because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
 
-            # check that we have a lightsheet
+        # check all caustics
+        for obj in context.selected_objects:
+            assert obj.caustic_info.path, obj  # poll failed us!
+
+            # we won't refine finalized caustics, so don't even allow them
+            if obj.caustic_info.finalized:
+                return cancel(obj, reasons="it is already finalized")
+
+            # check that caustic has a lightsheet
             lightsheet = obj.caustic_info.lightsheet
             if lightsheet is None:
-                reasons = "it has no lightsheet"
-                msg = f"Cannot refine {obj.name} because {reasons}!"
-                self.report({"ERROR"}, msg)
-                return {'CANCELLED'}
+                return cancel(obj, reasons="it has no lightsheet")
 
             # check that light (parent of lightsheet) is valid
             light = lightsheet.parent
             if light is None or light.type != 'LIGHT':
-                reasons = "lightsheet parent is not a light"
-                msg = f"Cannot refine {obj.name} because {reasons}!"
-                self.report({"ERROR"}, msg)
-                return {'CANCELLED'}
+                return cancel(obj, reasons="lightsheet parent is not a light")
 
             # check that light type is supported
             light_type = light.data.type
-            if light_type not in {'SUN', 'SPOT', 'POINT'}:
-                reasons = f"{light_type.capitalize()} lights are not supported"
-                msg = f"Cannot refine {obj.name} because {reasons}!"
-                self.report({"ERROR"}, msg)
-                return {'CANCELLED'}
+            if light_type not in ('SUN', 'SPOT', 'POINT'):
+                reasons = f"{light_type.lower()} lights are not supported"
+                return cancel(obj, reasons)
 
         # set properties via dialog window
         wm = context.window_manager
@@ -122,32 +117,25 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 
         # gather caustics that should be refined, this must be done before we
         # hide caustics and lightsheets because hiding will deselect objects
-        skipped = 0
-        refinable_caustics = []
-        for obj in context.selected_objects:
-            # skip if not caustic (no caustic path) or is finalized
-            if obj.caustic_info.path and not obj.caustic_info.finalized:
-                refinable_caustics.append(obj)
-            else:
-                skipped += 1
+        caustics = list(context.selected_objects)
 
         # refine caustics
-        num_verts_old, num_verts_now = 0, 0
+        tic = perf_counter()
+        num_verts_before, num_verts_now = 0, 0
         with trace.configure_for_trace(context) as depsgraph:
-            tic = perf_counter()
-            for caustic in refinable_caustics:
-                num_verts_old += len(caustic.data.vertices)
+            for caustic in caustics:
+                num_verts_before += len(caustic.data.vertices)
                 refine_caustic(caustic, depsgraph, relative_tolerance,
                                self.span_faces,
                                self.grow_boundary)
                 num_verts_now += len(caustic.data.vertices)
-            toc = perf_counter()
+        toc = perf_counter()
 
         # report statistics
-        v_stats = f"Added {num_verts_now-num_verts_old:,} verts"
-        s_stats = f"skipped {skipped} objects"
+        v_stats = f"Added {num_verts_now-num_verts_before:,} verts"
+        o_stats = f"{len(caustics)} caustics"
         t_stats = f"{toc-tic:.1f}s"
-        self.report({"INFO"}, f"{v_stats} and {s_stats} in {t_stats}")
+        self.report({"INFO"}, f"{v_stats} to {o_stats} in {t_stats}")
 
         return {"FINISHED"}
 

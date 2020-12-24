@@ -84,51 +84,51 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 
     @classmethod
     def poll(cls, context):
-        # operator makes sense only if some caustics are selected
-        objects = context.selected_objects
-        if objects:
-            for obj in objects:
-                caustic_info = obj.caustic_info
-                if caustic_info.path and not caustic_info.finalized:
-                    return True
-        return False
+        # operator makes sense only for caustics
+        return all(obj.caustic_info.path for obj in context.selected_objects)
 
     def invoke(self, context, event):
+        # check that no caustic has been finalized already
+        for obj in context.selected_objects:
+            assert obj.caustic_info.path, obj  # poll failed us!
+            if obj.caustic_info.finalized:
+                reasons = "it is already finalized"
+                msg = f"Can't finalize {obj.name} because {reasons}!"
+                self.report({"ERROR"}, msg)
+                return {'CANCELLED'}
+
         # set properties via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
-        tic = perf_counter()
-        finalized, skipped, deleted = 0, 0, 0
-        for obj in context.selected_objects:
-            # skip objects that are not caustics or are already finalized
-            if not obj.caustic_info.path or obj.caustic_info.finalized:
-                skipped += 1
-                continue
+        # set intensity threshold
+        if self.remove_dim_faces:
+            intensity_threshold = self.intensity_threshold
+        else:
+            intensity_threshold = None
 
-            min_dim = self.intensity_threshold if self.remove_dim_faces else 0
-            finalize_caustic(obj, self.fade_boundary, min_dim,
+        # finalize selected caustics
+        tic = perf_counter()
+        finalized, deleted = 0, 0
+        for caustic in context.selected_objects:
+            finalize_caustic(caustic, self.fade_boundary, intensity_threshold,
                              self.fix_overlap)
-            if self.delete_empty_caustics and len(obj.data.polygons) == 0:
+
+            if self.delete_empty_caustics and len(caustic.data.polygons) == 0:
                 # delete caustic object
-                bpy.data.objects.remove(obj)
+                bpy.data.objects.remove(caustic)
                 deleted += 1
             else:
                 # count as finalized
                 finalized += 1
         toc = perf_counter()
 
-        if not self.delete_empty_caustics:
-            assert deleted == 0, (finalized, deleted, skipped)
-
         # report statistics
         f_stats = f"Finalized {finalized}"
-        d_stats = f"deleted {deleted}"
-        s_stats = f"skipped {skipped} objects"
+        d_stats = f"deleted {deleted} caustics"
         t_stats = f"{toc-tic:.1f}s"
-        message = f"{f_stats}, {d_stats} and {s_stats} in {t_stats}"
-        self.report({"INFO"}, message)
+        self.report({"INFO"}, f"{f_stats} and {d_stats} in {t_stats}")
 
         return {"FINISHED"}
 
@@ -147,7 +147,7 @@ def finalize_caustic(caustic, fade_boundary, intensity_threshold, fix_overlap):
         fadeout_caustic_boundary(caustic_bm)
 
     # smooth out and cleanup
-    if intensity_threshold > 0:
+    if intensity_threshold is not None:
         remove_dim_faces(caustic_bm, intensity_threshold)
 
     # stack overlapping faces in layers

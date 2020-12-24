@@ -59,35 +59,53 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for lightsheets (must have light as parent)
-        obj = context.object
-        if obj is not None and obj.type == 'MESH':
-            return obj.parent is not None and obj.parent.type == 'LIGHT'
-        return False
+        for obj in context.selected_objects:
+            if (obj.type != 'MESH' or obj.parent is None
+                    or obj.parent.type != 'LIGHT'):
+                return False
+        return True
 
     def invoke(self, context, event):
+        # cancel operator for area lights
+        for obj in context.selected_objects:
+            assert obj.parent is not None, obj  # poll failed us!
+            light_type = obj.parent.data.type
+            if light_type not in ('SUN', 'SPOT', 'POINT'):
+                reasons = f"{light_type.lower()} lights are not supported"
+                msg = f"Can't trace '{obj.name}' because {reasons}!"
+                self.report({"ERROR"}, msg)
+                return {'CANCELLED'}
+
         # set properties via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
-        # verify lightsheet
-        lightsheet = verify_object_is_lightsheet(context.object, context.scene)
+        # verify lightsheets
+        lightsheets = [verify_lightsheet(obj, context.scene)
+                       for obj in context.selected_objects]
 
-        # raytrace lightsheet
-        with trace.configure_for_trace(context) as depsgraph:
-            tic = perf_counter()
-            caustics = trace_lightsheet(lightsheet, depsgraph,
-                                        self.max_bounces,
-                                        self.dismiss_empty_caustics)
-            toc = perf_counter()
+        # raytrace lightsheet and gather all caustics, note that caustics are
+        # not yet linked to scene collection, so they will not interfere with
+        # lightsheet tracings that may follow if multiple lightsheets were
+        # selected
+        tic = perf_counter()
+        all_caustics = []
+        for lightsheet in lightsheets:
+            with trace.configure_for_trace(context) as depsgraph:
+                caustics = trace_lightsheet(lightsheet, depsgraph,
+                                            self.max_bounces,
+                                            self.dismiss_empty_caustics)
+            all_caustics.extend(caustics)
+        toc = perf_counter()
 
-        # get or setup collection for caustics and add objects
+        # add caustics to the right scene collection
         coll = utils.verify_collection_for_scene(context.scene, "caustics")
-        for obj in caustics:
+        for obj in all_caustics:
             coll.objects.link(obj)
 
         # report statistics
-        c_stats = f"{len(caustics)} caustics"
+        c_stats = f"{len(caustics)} caustic(s)"
         t_stats = f"{toc - tic:.1f}s"
         self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
 
@@ -97,7 +115,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by trace lightsheet operator
 # -----------------------------------------------------------------------------
-def verify_object_is_lightsheet(obj, scene):
+def verify_lightsheet(obj, scene):
     """Ensure that the given object can be used as a lightsheet."""
     assert obj is not None and obj.type == 'MESH'
     assert obj.parent is not None and obj.parent.type == 'LIGHT'
