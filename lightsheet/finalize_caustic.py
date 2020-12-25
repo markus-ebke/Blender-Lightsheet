@@ -37,6 +37,7 @@ Helper functions:
 """
 
 from collections import defaultdict, deque
+from math import pi
 from time import perf_counter
 
 import bmesh
@@ -60,14 +61,14 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     )
     remove_dim_faces: bpy.props.BoolProperty(
         name="Remove dim faces",
-        description="Remove faces that are less intense than the cutoff below",
+        description="Remove faces that emit less power than the cutoff below",
         default=True
     )
-    intensity_threshold: bpy.props.FloatProperty(
-        name="Intensity Treshold",
-        description="Remove face if for every vertex: caustic squeeze * tint "
-        "<= threshold (note: light strength is not included)",
-        default=0.0001, min=0.0, precision=5, subtype='FACTOR'
+    emission_threshold: bpy.props.FloatProperty(
+        name="Emit Strength Treshold",
+        description="Remove face if their emission strength (in W/m^2) is "
+        "lower than this value (note: current light strength is included)",
+        default=0.0001, min=0.0, precision=5
     )
     delete_empty_caustics: bpy.props.BoolProperty(
         name="Delete empty caustics",
@@ -88,14 +89,35 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         return all(obj.caustic_info.path for obj in context.selected_objects)
 
     def invoke(self, context, event):
-        # check that no caustic has been finalized already
+        # cancel with error message
+        def cancel(obj, reasons):
+            msg = f"Can't refine '{obj.name}' because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
+
+        # check all caustics
         for obj in context.selected_objects:
             assert obj.caustic_info.path, obj  # poll failed us!
+
+            # we won't finalize already finalized caustics
             if obj.caustic_info.finalized:
-                reasons = "it is already finalized"
-                msg = f"Can't finalize {obj.name} because {reasons}!"
-                self.report({"ERROR"}, msg)
-                return {'CANCELLED'}
+                return cancel(obj, reasons="it is already finalized")
+
+            # check that caustic has a lightsheet
+            lightsheet = obj.caustic_info.lightsheet
+            if lightsheet is None:
+                return cancel(obj, reasons="it has no lightsheet")
+
+            # check that light (parent of lightsheet) is valid
+            light = lightsheet.parent
+            if light is None or light.type != 'LIGHT':
+                return cancel(obj, reasons="lightsheet parent is not a light")
+
+            # check that light type is supported
+            light_type = light.data.type
+            if light_type not in ('SUN', 'SPOT', 'POINT'):
+                reasons = f"{light_type.lower()} lights are not supported"
+                return cancel(obj, reasons)
 
         # set properties via dialog window
         wm = context.window_manager
@@ -104,15 +126,15 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     def execute(self, context):
         # set intensity threshold
         if self.remove_dim_faces:
-            intensity_threshold = self.intensity_threshold
+            emission_threshold = self.emission_threshold
         else:
-            intensity_threshold = None
+            emission_threshold = None
 
         # finalize selected caustics
         tic = perf_counter()
         finalized, deleted = 0, 0
         for caustic in context.selected_objects:
-            finalize_caustic(caustic, self.fade_boundary, intensity_threshold,
+            finalize_caustic(caustic, self.fade_boundary, emission_threshold,
                              self.fix_overlap)
 
             if self.delete_empty_caustics and len(caustic.data.polygons) == 0:
@@ -136,7 +158,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
-def finalize_caustic(caustic, fade_boundary, intensity_threshold, fix_overlap):
+def finalize_caustic(caustic, fade_boundary, emission_threshold, fix_overlap):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
@@ -147,8 +169,10 @@ def finalize_caustic(caustic, fade_boundary, intensity_threshold, fix_overlap):
         fadeout_caustic_boundary(caustic_bm)
 
     # smooth out and cleanup
-    if intensity_threshold is not None:
-        remove_dim_faces(caustic_bm, intensity_threshold)
+    if emission_threshold is not None:
+        light = caustic.caustic_info.lightsheet.parent
+        assert light is not None and light.type == 'LIGHT', (caustic, light)
+        remove_dim_faces(caustic_bm, light, emission_threshold)
 
     # stack overlapping faces in layers
     if fix_overlap:
@@ -177,19 +201,28 @@ def fadeout_caustic_boundary(caustic_bm):
             loop[color_layer] = (0.0, 0.0, 0.0, 0.0)
 
 
-def remove_dim_faces(caustic_bm, intensity_threshold):
+def remove_dim_faces(caustic_bm, light, emission_threshold):
     """Remove invisible faces and cleanup resulting mesh."""
+    # emission strength and color from caustic
     squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
     color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
 
-    # mark faces with intensity less than intensity_threshold
+    # light color and strength, see also material.py: add_drivers_from_light
+    assert light.data.type in ('POINT', 'SPOT', 'SUN')
+    if light.data.type in {'POINT', 'SPOT'}:
+        light_strength = light.data.energy / (4 * pi**2)
+    else:
+        light_strength = light.data.energy / pi
+    light_strength *= light.data.color.v
+
+    # gather faces with low emission strength
     invisible_faces = []
     for face in caustic_bm.faces:
         visible = False
         for loop in face.loops:
             squeeze = loop[squeeze_layer].uv[1]
             tint_v = max(loop[color_layer][:3])  # = Color(...).v
-            if squeeze * tint_v > intensity_threshold:
+            if light_strength * tint_v * squeeze > emission_threshold:
                 # vertex is intense enough, face is visible
                 visible = True
                 break
