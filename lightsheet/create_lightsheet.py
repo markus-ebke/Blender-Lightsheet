@@ -30,7 +30,7 @@ Helper functions:
 """
 
 from math import sqrt, tan
-from time import perf_counter
+from time import process_time as stopwatch
 
 import bmesh
 import bpy
@@ -74,12 +74,12 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
 
     def execute(self, context):
         # create lightsheets for every selected object (will all be lamps)
-        tic = perf_counter()
+        tic = stopwatch()
         lightsheets = []
         for obj in context.selected_objects:
             lightsheet = setup_lightsheet(obj, self.resolution)
             lightsheets.append(lightsheet)
-        toc = perf_counter()
+        toc = stopwatch()
 
         # add lightsheets to the right scene collection
         coll = utils.verify_collection_for_scene(context.scene, "lightsheets")

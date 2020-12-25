@@ -31,7 +31,7 @@ Helper functions:
 """
 
 from collections import defaultdict
-from time import perf_counter
+from time import process_time as stopwatch
 
 import bmesh
 import bpy
@@ -86,19 +86,26 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         lightsheets = [verify_lightsheet(obj, context.scene)
                        for obj in context.selected_objects]
 
+        # setup progress indicator
+        wm = context.window_manager
+        prog = utils.ProgressIndicator(len(lightsheets), wm)
+
         # raytrace lightsheet and gather all caustics, note that caustics are
         # not yet linked to scene collection, so they will not interfere with
         # lightsheet tracings that may follow if multiple lightsheets were
         # selected
-        tic = perf_counter()
+        tic = stopwatch()
         all_caustics = []
-        for lightsheet in lightsheets:
-            with trace.configure_for_trace(context) as depsgraph:
+        with trace.configure_for_trace(context) as depsgraph:
+            for lightsheet in lightsheets:
+                prog.start_job(lightsheet.name, total_tasks=4)
                 caustics = trace_lightsheet(lightsheet, depsgraph,
                                             self.max_bounces,
-                                            self.dismiss_empty_caustics)
-            all_caustics.extend(caustics)
-        toc = perf_counter()
+                                            self.dismiss_empty_caustics, prog)
+                prog.stop_job()
+                all_caustics.extend(caustics)
+            prog.end()
+        toc = stopwatch()
 
         # add caustics to the right scene collection
         coll = utils.verify_collection_for_scene(context.scene, "caustics")
@@ -106,6 +113,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
             coll.objects.link(obj)
 
         # report statistics
+        prog.print_stats()
         c_stats = f"{len(all_caustics)} caustic(s)"
         t_stats = f"{toc - tic:.1f}s"
         self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
@@ -139,7 +147,7 @@ def verify_lightsheet(obj, scene):
     return obj
 
 
-def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
+def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
     """Trace rays from lighsheet and return list of caustics."""
     # convert lightsheet to bmesh
     lightsheet_bm = bmesh.new(use_operators=False)
@@ -149,6 +157,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
     get_sheet, _ = utils.setup_sheet_property(lightsheet_bm)
 
     # trace rays and record results
+    prog.start_task("tracing rays", len(lightsheet_bm.verts))
     traced = defaultdict(dict)  # traced = {chain: {sheet_pos: CausticData}}
     first_ray = trace.setup_lightsheet_first_ray(lightsheet)
     for vert in lightsheet_bm.verts:
@@ -162,13 +171,16 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
         sheet_key = sheet_pos.to_tuple()
         for chain, cdata in result:
             traced[chain][sheet_key] = cdata
+        prog.update_progress()
     lightsheet_bm.free()
 
     # convert to Blender objects
+    prog.start_task("converting to objects", len(traced))
     caustics = []
     traced_sorted = sorted(traced.items(),
                            key=lambda item: utils.chain_complexity(item[0]))
-    for chain, sheet_to_data in traced_sorted:
+    for item in traced_sorted:
+        chain, sheet_to_data = item
         caustic = convert_caustic_to_objects(lightsheet, chain, sheet_to_data)
 
         # if wanted by user delete empty caustics
@@ -176,6 +188,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
             bpy.data.objects.remove(caustic)
         else:
             caustics.append(caustic)
+        prog.update_progress()
 
     return caustics
 

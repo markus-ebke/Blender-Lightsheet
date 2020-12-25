@@ -30,6 +30,9 @@
 - set_caustic_face_data (used by trace_lightsheet and refine_caustics)
 """
 
+import sys
+import time
+
 import bmesh
 import bpy
 from mathutils import Matrix, Vector
@@ -248,3 +251,170 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
             face.normal_flip()
 
     caustic_bm.normal_update()
+
+
+class ProgressIndicator:
+    """Show progress of tasks via window manager indicator and terminal."""
+
+    def __init__(self, total_jobs, wm, update_delay=0.1):
+        # jobs
+        self.total_jobs = total_jobs
+        self.current_job = 0
+        self.job_name = ""
+
+        # tasks
+        self.total_tasks = None
+        self.current_task = None
+        self.task_name = ""
+
+        # steps
+        self.total_steps = None
+        self.current_step = None
+
+        # description of job and task shown in front of progress counter
+        self._description = ""
+
+        # timing for updates
+        self.update_delay = update_delay
+        self.clock = time.monotonic
+        self.last_update = self.clock()
+
+        # stats
+        self.stopwatch = time.process_time
+        self.tic_job = None
+        self.tic_task = None
+        self.job_stats = []
+        self.task_stats = []
+
+        # window manager to show indicator, displays a 4-digit number were the
+        # first two digits count the current job (can show at most 99 jobs)
+        # and the last two digits represent the job progress in percent (0-99)
+        self.wm = wm
+        self.wm.progress_begin(0, 10000)
+
+    def _clear_output(self):
+        """Clear last output and reset cursor to start of line."""
+        clear_length = len(self._description) + 6
+        sys.stdout.write("\r" + " " * clear_length + "\r")
+        sys.stdout.flush()
+
+    def start_job(self, job_name, total_tasks=1):
+        """Switch to next job."""
+        # stop last job if not done already
+        self.stop_job()
+
+        # setup new job
+        self.current_job += 1
+        self.job_name = job_name
+
+        # reset task
+        self.total_tasks = total_tasks
+        self.current_task = 0
+
+        # start job timer
+        self.tic_job = self.stopwatch()
+
+    def stop_job(self):
+        """Stop job and task timers and record time."""
+        # stop last task
+        self.stop_task()
+
+        # update time of last job, if timer is active
+        if self.tic_job is not None:
+            toc = self.stopwatch()
+            job_timing = (self.job_name, toc - self.tic_job, self.task_stats)
+            self.task_stats = []
+            self.job_stats.append(job_timing)
+
+        # deactivate timer
+        self.tic_job = None
+
+    def start_task(self, task_name, total_steps=1):
+        """Switch to next task."""
+        # stop last task if not done already
+        self.stop_task()
+
+        # setup new task
+        self.current_task += 1
+        self.task_name = task_name
+
+        # set description
+        self._clear_output()
+        if len(self.job_name) > 40:  # show at most 40 character of job name
+            # truncate name such that we see the tail
+            job_name = f"[...]{self.job_name[-35:]}"
+        else:
+            job_name = self.job_name
+        self._description = (f"{self.current_job}/{self.total_jobs} "
+                             f"{job_name}: {self.task_name}")
+
+        # reset progress
+        self.total_steps = total_steps
+        self.update_progress(step=0, force=True)
+
+        # start task timer
+        self.tic_task = self.stopwatch()
+
+    def stop_task(self):
+        """Stop task timer and record time."""
+        # update time of last task, if timer is active
+        if self.tic_task is not None:
+            toc = self.stopwatch()
+            self.task_stats.append((self.task_name, toc - self.tic_task))
+
+        # deactivate timer
+        self.tic_task = None
+
+    def update_progress(self, step=None, force=False):
+        """Update progress of current task."""
+        # what time is it?
+        if self.clock() - self.last_update > self.update_delay or force:
+            # IT'S UPDATE TIME!!!
+            if step is not None:
+                self.current_step = step
+            else:
+                self.current_step += 1
+
+            # update completed fraction of current task and job
+            task_frac = self.current_step / self.total_steps
+            job_frac = (self.current_task - 1 + task_frac) / self.total_tasks
+
+            # update window manager progress counter
+            self.wm.progress_update(100 * (self.current_job + job_frac))
+
+            # update terminal output, note that \r will go back to the start of
+            # the line so that we can overwrite it, idea taken from
+            # https://blender.stackexchange.com/a/30739
+            sys.stdout.write(f"\r{self._description} {task_frac:.0%}")
+            sys.stdout.flush()
+
+            # reset timer
+            self.last_update = self.clock()
+
+    def end(self):
+        """Stop last job and end indicator."""
+        # stop last job if not done already
+        self.stop_job()
+
+        # clear last output
+        self._clear_output()
+
+        # stop window indicator
+        self.wm.progress_end()
+
+    def print_stats(self):
+        """Print time stats for each job."""
+        job_time_sum = 0.0
+        for job_name, job_time, task_stats in self.job_stats:
+            # print info about job
+            print(f"{job_name}: {job_time:.3f}s")
+            job_time_sum += job_time
+
+            # print info about each task
+            task_time_sum = 0.0
+            for task_name, task_time in task_stats:
+                print(f"    {task_name}: {task_time:.3f}s")
+                task_time_sum += task_time
+            print(f"    <unaccounted>: {job_time-task_time_sum:.3f}s")
+
+        print(f"Total time ({len(self.job_stats)} jobs): {job_time_sum:.3f}s")

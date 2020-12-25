@@ -22,7 +22,7 @@
 
 LIGHTSHEET_OT_visualize_raypath: Operator to retrace raypath for selected verts
 """
-from time import perf_counter
+from time import process_time as stopwatch
 
 import bmesh
 import bpy
@@ -85,10 +85,10 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
 
         # visualize
         with trace.configure_for_trace(context) as depsgraph:
-            tic = perf_counter()
+            tic = stopwatch()
             trails = gather_trails(obj, depsgraph)
             path_obj = convert_trails_to_objects(trails, obj)
-            toc = perf_counter()
+            toc = stopwatch()
 
         # add path to caustic collection
         coll = utils.verify_collection_for_scene(context.scene, "caustics")
