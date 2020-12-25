@@ -226,7 +226,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
         vert_normal_sum = Vector((0.0, 0.0, 0.0))
         for loop in face.loops:
             # get data for this vertex (if any)
-            sheet_key = tuple(get_sheet(loop.vert))
+            sheet_key = get_sheet(loop.vert).to_tuple()
             cdata = sheet_to_data.get(sheet_key)
             if cdata is not None:
                 # sheet position to uv-coordinates
@@ -235,7 +235,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
                 loop[uv_sheet_xz].uv = (sx, sz)
 
                 # set face data
-                loop[color_layer] = tuple(cdata.color) + (1,)
+                loop[color_layer] = cdata.color + (1,)
                 if uv_layer is not None:
                     assert cdata.uv is not None, uv_layer.name
                     loop[uv_layer].uv = cdata.uv

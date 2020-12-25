@@ -37,7 +37,7 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
     bl_label = "Visualize Raypath"
     bl_options = {'REGISTER', 'UNDO'}
 
-    num_verts: bpy.props.IntProperty(name="Number of selected vertices")
+    num_verts: bpy.props.IntProperty(name="Number of Selected Vertices")
 
     @classmethod
     def poll(cls, context):
@@ -148,7 +148,7 @@ def gather_trails(caustic, depsgraph):
 
 
 def convert_trails_to_objects(trails, caustic):
-    """Convert trails to blender object and parent to caustic."""
+    """Convert trails to Blender object and parent to caustic."""
     path_bm = bmesh.new()
     path_name = f"Raypath of {caustic.name}"
 

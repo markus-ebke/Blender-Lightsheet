@@ -43,7 +43,7 @@ from functools import lru_cache
 from math import copysign, exp
 
 import bpy
-from mathutils import Color, Vector
+from mathutils import Vector
 from mathutils.geometry import (barycentric_transform, intersect_point_tri,
                                 tessellate_polygon)
 
@@ -57,9 +57,9 @@ Ray = namedtuple("Ray", ["origin", "direction", "tint", "chain"])
 Ray.__doc__ = """Record ray information for tracing.
 
     We want to cast a ray from the ray origin (mathutils.Vector) in the given
-    direction (mathutils.Vector). Further we need the tint of the ray
-    (mathutils.Color) and a record of the chain of interaction along the
-    already taken raypath (a tuple of Link instances).
+    direction (mathutils.Vector). Further we need the tint of the ray (3-tuple)
+    and a record of the chain of interaction along the already taken raypath
+    (a tuple of Link instances).
     """
 
 # organize links in interaction chains
@@ -77,7 +77,7 @@ CausticData = namedtuple("CausticData", ["location", "color", "uv", "perp",
 CausticData.__doc__ = """Data for a caustic vertex at the specified location.
 
     location (mathutils.Vector): location in scene space of final point
-    color (mathutils.Color): color of caustic at the final point
+    color (3-tuple): color of caustic at the final point
     uv (mathutils.Vector): uv-coordinates on the hit object (may be None)
     perp (mathutils.Vector): direction in scene space pointing perpendicularly
         away from the hit face (away from the front- or the backside depending
@@ -102,8 +102,7 @@ def setup_lightsheet_first_ray(lightsheet):
 
     # setup first ray of given vertex coordinate depending on light type
     assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
-    white = Color((1.0, 1.0, 1.0))
-    white.freeze()  # will use as default value, therefore should be immutable
+    white = (1.0, 1.0, 1.0)
     if lightsheet.parent.data.type == 'SUN':
         # parallel projection along -z axis (local coordinates)
         # note that origin = matrix @ Vector((0, 0, 0))
@@ -228,8 +227,10 @@ def trace_scene(ray, depsgraph, max_bounces):
                                   for val in vol_color]
 
                 # tint the color of the new ray
-                mult = [c * t * v for (c, t, v) in zip(color, tint, volume)]
-                new_color = Color(mult)
+                # new_color = [c*t*v for (c, t, v) in zip(color, tint, volume)]
+                new_color = (color[0] * tint[0] * volume[0],
+                             color[1] * tint[1] * volume[1],
+                             color[2] * tint[2] * volume[2])
 
                 # extend path of ray
                 if new_direction.dot(face_normal) < 0:
@@ -242,6 +243,7 @@ def trace_scene(ray, depsgraph, max_bounces):
                 # trace new ray
                 new_ray = Ray(new_origin, new_direction, new_color, new_chain)
                 stack.append(new_ray)
+
     return caustic_data
 
 
@@ -323,8 +325,10 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
                               for val in vol_color]
 
             # tint the color of the new ray
-            mult = [c * t * v for (c, t, v) in zip(color, tint, volume)]
-            new_color = Color(mult)
+            # new_color = [c*t*v for (c, t, v) in zip(color, tint, volume)]
+            new_color = (color[0] * tint[0] * volume[0],
+                         color[1] * tint[1] * volume[1],
+                         color[2] * tint[2] * volume[2])
 
             # extend path of ray
             if new_direction.dot(face_normal) < 0:

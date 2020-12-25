@@ -57,7 +57,7 @@ class CausticInfo(bpy.types.PropertyGroup):
         description="Lightsheet object that send out this caustic")
     path: CollectionProperty(
         type=CausticPathLink,
-        name="Lightsheet path",
+        name="Lightsheet Path",
         description="Path of the lightrays to this caustic")
     finalized: BoolProperty(
         name="Finalized", description="If caustic has been finalized",

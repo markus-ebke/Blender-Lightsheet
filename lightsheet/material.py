@@ -58,7 +58,6 @@ Interaction.__doc__ = """Type of ray after surface interaction.
 # helper functions ------------------------------------------------------------
 def fresnel(ray_direction, normal, ior):
     """Fresnel mix factor."""
-    # TODO simplify all of this?
     # cosine of angle between incident and normal directions
     cos_in = -ray_direction.dot(normal)
 
@@ -697,6 +696,7 @@ def add_drivers_from_light(color, strength, light):
         # point and spot lights emit their energy over a sphere (area = 4*pi)
         driver.expression = "energy / (4 * pi * pi)"
     else:
+        assert light.data.type == 'SUN'
         # strength of sun light is already in W/m^2
         driver.expression = "energy / pi"
 

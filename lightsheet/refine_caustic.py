@@ -55,7 +55,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         default=0.1, min=0.0, soft_max=1.0, precision=2,
     )
     span_faces: bpy.props.BoolProperty(
-        name="Subdivide edges spanning faces",
+        name="Subdivide Edges Spanning Faces",
         description="Always subdivide edges whose vertices lie on different "
         "faces of the underlying object (better for wrapping around curved "
         "objects)",
@@ -194,7 +194,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
             # split edge if projection is not straight enough
             ray = first_ray(sheet_mid)
             cdata, _ = trace.trace_along_chain(ray, depsgraph, chain)
-            sheet_to_data[tuple(sheet_mid)] = cdata
+            sheet_to_data[sheet_mid.to_tuple()] = cdata
 
             if cdata is None:
                 # edge will be deleted, split it and see later what happens
@@ -263,7 +263,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance=None,
         # get sheet coords and convert to key for dict (cannot use Vectors as
         # keys because they are mutable)
         sheet_pos = get_sheet(vert)
-        sheet_key = tuple(sheet_pos)
+        sheet_key = sheet_pos.to_tuple()
 
         # trace ray if necessary
         if sheet_key in sheet_to_data:

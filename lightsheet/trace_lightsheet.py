@@ -52,7 +52,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         default=4, min=0
     )
     dismiss_empty_caustics: bpy.props.BoolProperty(
-        name="Dismiss empty caustics",
+        name="Dismiss Empty Caustics",
         description="Don't create caustics that would end up with no faces",
         default=True
     )
@@ -159,12 +159,12 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
                                    max_bounces)
 
         # add data to traced
-        sheet_key = tuple(sheet_pos)
+        sheet_key = sheet_pos.to_tuple()
         for chain, cdata in result:
             traced[chain][sheet_key] = cdata
     lightsheet_bm.free()
 
-    # convert to blender objects
+    # convert to Blender objects
     caustics = []
     traced_sorted = sorted(traced.items(),
                            key=lambda item: utils.chain_complexity(item[0]))
@@ -181,7 +181,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty):
 
 
 def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
-    """Convert caustic bmesh to blender object with filled in faces."""
+    """Convert caustic bmesh to Blender object with filled in faces."""
     # setup and fill caustic bmesh
     caustic_bm = setup_caustic_bmesh(sheet_to_data)
     fill_caustic_faces(caustic_bm, lightsheet)
@@ -300,7 +300,7 @@ def fill_caustic_faces(caustic_bm, lightsheet):
     # before using it as a key for dict
     sheet_to_caustic_vert = dict()
     for vert in caustic_bm.verts:
-        sheet_key = tuple(caustic_get_sheet(vert))
+        sheet_key = caustic_get_sheet(vert).to_tuple()
         assert sheet_key not in sheet_to_caustic_vert
         sheet_to_caustic_vert[sheet_key] = vert
 
@@ -309,7 +309,7 @@ def fill_caustic_faces(caustic_bm, lightsheet):
         # gather verts and sheet positions of caustic face
         caustic_verts = []
         for ls_vert in ls_face.verts:
-            sheet_key = tuple(ls_get_sheet(ls_vert))
+            sheet_key = ls_get_sheet(ls_vert).to_tuple()
             if sheet_key in sheet_to_caustic_vert:
                 vert = sheet_to_caustic_vert[sheet_key]
                 caustic_verts.append(vert)

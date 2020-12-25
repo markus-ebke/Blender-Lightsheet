@@ -55,28 +55,28 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     fade_boundary: bpy.props.BoolProperty(
-        name="Fade out boundary",
+        name="Fade Out Boundary",
         description="Hide boundary by making it transparent",
         default=True
     )
     remove_dim_faces: bpy.props.BoolProperty(
-        name="Remove dim faces",
+        name="Remove Dim Faces",
         description="Remove faces that emit less power than the cutoff below",
         default=True
     )
-    emission_threshold: bpy.props.FloatProperty(
-        name="Emit Strength Treshold",
+    emission_cutoff: bpy.props.FloatProperty(
+        name="Emit Strength Cutoff",
         description="Remove face if their emission strength (in W/m^2) is "
         "lower than this value (note: current light strength is included)",
         default=0.0001, min=0.0, precision=5
     )
     delete_empty_caustics: bpy.props.BoolProperty(
-        name="Delete empty caustics",
+        name="Delete Empty Caustics",
         description="If after cleanup no faces remain, delete the caustic",
         default=True
     )
     fix_overlap: bpy.props.BoolProperty(
-        name="Cycles: Fix overlap artifacts",
+        name="Cycles: Fix Overlap Artifacts",
         description="WARNING: SLOW! Prevent render artifacts in Cycles caused "
         "by overlapping faces, will find intersecting faces (slow!) and stack "
         "them on top of each other",
@@ -126,15 +126,15 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     def execute(self, context):
         # set intensity threshold
         if self.remove_dim_faces:
-            emission_threshold = self.emission_threshold
+            emission_cutoff = self.emission_cutoff
         else:
-            emission_threshold = None
+            emission_cutoff = None
 
         # finalize selected caustics
         tic = perf_counter()
         finalized, deleted = 0, 0
         for caustic in context.selected_objects:
-            finalize_caustic(caustic, self.fade_boundary, emission_threshold,
+            finalize_caustic(caustic, self.fade_boundary, emission_cutoff,
                              self.fix_overlap)
 
             if self.delete_empty_caustics and len(caustic.data.polygons) == 0:
@@ -158,7 +158,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
-def finalize_caustic(caustic, fade_boundary, emission_threshold, fix_overlap):
+def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
@@ -169,10 +169,10 @@ def finalize_caustic(caustic, fade_boundary, emission_threshold, fix_overlap):
         fadeout_caustic_boundary(caustic_bm)
 
     # smooth out and cleanup
-    if emission_threshold is not None:
+    if emission_cutoff is not None:
         light = caustic.caustic_info.lightsheet.parent
         assert light is not None and light.type == 'LIGHT', (caustic, light)
-        remove_dim_faces(caustic_bm, light, emission_threshold)
+        remove_dim_faces(caustic_bm, light, emission_cutoff)
 
     # stack overlapping faces in layers
     if fix_overlap:
@@ -201,7 +201,7 @@ def fadeout_caustic_boundary(caustic_bm):
             loop[color_layer] = (0.0, 0.0, 0.0, 0.0)
 
 
-def remove_dim_faces(caustic_bm, light, emission_threshold):
+def remove_dim_faces(caustic_bm, light, emission_cutoff):
     """Remove invisible faces and cleanup resulting mesh."""
     # emission strength and color from caustic
     squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
@@ -222,7 +222,7 @@ def remove_dim_faces(caustic_bm, light, emission_threshold):
         for loop in face.loops:
             squeeze = loop[squeeze_layer].uv[1]
             tint_v = max(loop[color_layer][:3])  # = Color(...).v
-            if light_strength * tint_v * squeeze > emission_threshold:
+            if light_strength * tint_v * squeeze > emission_cutoff:
                 # vertex is intense enough, face is visible
                 visible = True
                 break
