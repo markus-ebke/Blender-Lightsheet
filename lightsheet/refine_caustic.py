@@ -138,7 +138,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         toc = stopwatch()
 
         # report statistics
-        prog.print_stats()
+        # prog.print_stats()
         v_stats = f"Added {num_verts_now-num_verts_before:,} verts"
         o_stats = f"{len(caustics)} caustics"
         t_stats = f"{toc-tic:.1f}s"

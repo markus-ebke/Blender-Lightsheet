@@ -91,7 +91,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     def invoke(self, context, event):
         # cancel with error message
         def cancel(obj, reasons):
-            msg = f"Can't refine '{obj.name}' because {reasons}!"
+            msg = f"Can't finalize '{obj.name}' because {reasons}!"
             self.report({"ERROR"}, msg)
             return {'CANCELLED'}
 
@@ -154,7 +154,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         toc = stopwatch()
 
         # report statistics
-        prog.print_stats()
+        # prog.print_stats()
         f_stats = f"Finalized {finalized}"
         d_stats = f"deleted {deleted} caustics"
         t_stats = f"{toc-tic:.1f}s"

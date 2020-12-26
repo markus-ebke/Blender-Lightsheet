@@ -113,9 +113,9 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
             coll.objects.link(obj)
 
         # report statistics
-        prog.print_stats()
+        # prog.print_stats()
         c_stats = f"{len(all_caustics)} caustic(s)"
-        t_stats = f"{toc - tic:.1f}s"
+        t_stats = f"{toc-tic:.1f}s"
         self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
 
         return {"FINISHED"}
@@ -126,7 +126,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 # -----------------------------------------------------------------------------
 def verify_lightsheet(obj, scene):
     """Ensure that the given object can be used as a lightsheet."""
-    assert obj is not None and obj.type == 'MESH'
+    assert obj.type == 'MESH'
     assert obj.parent is not None and obj.parent.type == 'LIGHT'
 
     # verify coordinate layers
@@ -157,7 +157,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
     get_sheet, _ = utils.setup_sheet_property(lightsheet_bm)
 
     # trace rays and record results
-    prog.start_task("tracing rays", len(lightsheet_bm.verts))
+    prog.start_task("tracing rays", total_steps=len(lightsheet_bm.verts))
     traced = defaultdict(dict)  # traced = {chain: {sheet_pos: CausticData}}
     first_ray = trace.setup_lightsheet_first_ray(lightsheet)
     for vert in lightsheet_bm.verts:
@@ -171,11 +171,12 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
         sheet_key = sheet_pos.to_tuple()
         for chain, cdata in result:
             traced[chain][sheet_key] = cdata
+
         prog.update_progress()
     lightsheet_bm.free()
 
     # convert to Blender objects
-    prog.start_task("converting to objects", len(traced))
+    prog.start_task("converting to objects", total_steps=len(traced))
     caustics = []
     traced_sorted = sorted(traced.items(),
                            key=lambda item: utils.chain_complexity(item[0]))
