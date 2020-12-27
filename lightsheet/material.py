@@ -607,7 +607,8 @@ def add_nodes_for_eevee(node_tree, light, uv_layer):
     output.target = 'EEVEE'
     mix_rgb_diffuse.blend_type = 'MULTIPLY'
     mix_rgb_diffuse.inputs['Fac'].default_value = 1.0
-    mix_rgb_diffuse.inputs['Color1'].default_value = (1.0, 1.0, 1.0, 1.0)
+    mix_rgb_diffuse.inputs['Color1'].default_value = (1.0, 0.0, 1.0, 1.0)
+    mix_rgb_diffuse.label = "Diffuse Mix"
     math.operation = 'MULTIPLY'
     mix_rgb_light.blend_type = 'MULTIPLY'
     mix_rgb_light.inputs['Fac'].default_value = 1.0
@@ -630,14 +631,6 @@ def add_nodes_for_eevee(node_tree, light, uv_layer):
     links.new(vertex_color.outputs[0], mix_rgb_light.inputs[2])
     links.new(uv_squeeze.outputs[0], sep_xyz.inputs[0])
 
-    # add RGB color picker for default diffuse color
-    diffuse = nodes.new(type='ShaderNodeRGB')
-    diffuse.location = (-660, -200)
-    diffuse.outputs[0].default_value = (1.0, 0.0, 1.0, 1.0)
-    diffuse.label = "Original Diffuse Color"
-    diffuse.use_custom_color = True
-    diffuse.color = (1.0, 0.0, 0.0)
-
     # add example texture and uvmap node for default diffuse color
     texture = nodes.new(type='ShaderNodeTexChecker')
     uv_map = nodes.new(type='ShaderNodeUVMap')
@@ -653,7 +646,6 @@ def add_nodes_for_eevee(node_tree, light, uv_layer):
 
     # connect color of texture depending on whether a uv layer was given
     if uv_layer is None:
-        links.new(diffuse.outputs[0], mix_rgb_diffuse.inputs[1])
         uv_map.uv_map = "UVMap"
     else:
         links.new(texture.outputs[0], mix_rgb_diffuse.inputs[1])

@@ -73,6 +73,7 @@ classes = (
     finalize_caustic.LIGHTSHEET_OT_finalize_caustic,
     visualize_raypath.LIGHTSHEET_OT_visualize_raypath,
     properties.CausticPathLink,
+    properties.CausticRefinementSetting,
     properties.CausticInfo,
 )
 

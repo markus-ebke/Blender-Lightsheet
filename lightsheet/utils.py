@@ -254,20 +254,16 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
 
 
 class ProgressIndicator:
-    """Show progress of tasks via window manager indicator and terminal."""
+    """Show progress of tasks in terminal."""
 
-    def __init__(self, total_jobs, wm, update_delay=0.1):
+    def __init__(self, total_jobs, update_delay=0.1):
         # jobs
         self.total_jobs = total_jobs
         self.current_job = 0
         self.job_name = ""
 
-        # tasks
-        self.total_tasks = None
-        self.current_task = None
+        # tasks and steps
         self.task_name = ""
-
-        # steps
         self.total_steps = None
         self.current_step = None
 
@@ -286,19 +282,13 @@ class ProgressIndicator:
         self.job_stats = []
         self.task_stats = []
 
-        # window manager to show indicator, displays a 4-digit number were the
-        # first two digits count the current job (can show at most 99 jobs)
-        # and the last two digits represent the job progress in percent (0-99)
-        self.wm = wm
-        self.wm.progress_begin(0, 10000)
-
     def _clear_output(self):
         """Clear last output and reset cursor to start of line."""
-        clear_length = len(self._description) + 6
+        clear_length = len(self._description) + 7  # include percentage
         sys.stdout.write("\r" + " " * clear_length + "\r")
         sys.stdout.flush()
 
-    def start_job(self, job_name, total_tasks=1):
+    def start_job(self, job_name):
         """Switch to next job."""
         # stop last job if not done already
         self.stop_job()
@@ -306,10 +296,6 @@ class ProgressIndicator:
         # setup new job
         self.current_job += 1
         self.job_name = job_name
-
-        # reset task
-        self.total_tasks = total_tasks
-        self.current_task = 0
 
         # start job timer
         self.tic_job = self.stopwatch()
@@ -335,7 +321,6 @@ class ProgressIndicator:
         self.stop_task()
 
         # setup new task
-        self.current_task += 1
         self.task_name = task_name
 
         # set description
@@ -375,17 +360,16 @@ class ProgressIndicator:
             else:
                 self.current_step += 1
 
-            # update completed fraction of current task and job
-            task_frac = self.current_step / self.total_steps
-            job_frac = (self.current_task - 1 + task_frac) / self.total_tasks
-
-            # update window manager progress counter
-            self.wm.progress_update(100 * (self.current_job + job_frac))
-
             # update terminal output, note that \r will go back to the start of
-            # the line so that we can overwrite it, idea taken from
-            # https://blender.stackexchange.com/a/30739
-            sys.stdout.write(f"\r{self._description} {task_frac:.0%}")
+            # the line so that we can overwrite the previous output
+            # idea taken from https://blender.stackexchange.com/a/30739
+            if self.total_steps > 1:
+                task_progress = self.current_step / self.total_steps
+                msg = f"\r{self._description} ({task_progress:.0%})"
+            else:
+                # for less than two steps a percentage counter is useless
+                msg = f"\r{self._description}"
+            sys.stdout.write(msg)
             sys.stdout.flush()
 
             # reset timer
@@ -399,22 +383,19 @@ class ProgressIndicator:
         # clear last output
         self._clear_output()
 
-        # stop window indicator
-        self.wm.progress_end()
-
     def print_stats(self):
-        """Print time stats for each job."""
+        """Print time stats for each job and task."""
         job_time_sum = 0.0
         for job_name, job_time, task_stats in self.job_stats:
             # print info about job
             print(f"{job_name}: {job_time:.3f}s")
             job_time_sum += job_time
 
-            # print info about each task
+            # print info about tasks
             task_time_sum = 0.0
             for task_name, task_time in task_stats:
                 print(f"    {task_name}: {task_time:.3f}s")
                 task_time_sum += task_time
-            print(f"    <unaccounted>: {job_time-task_time_sum:.3f}s")
+            print(f"    <other>: {job_time-task_time_sum:.3f}s")
 
         print(f"Total time ({len(self.job_stats)} jobs): {job_time_sum:.3f}s")

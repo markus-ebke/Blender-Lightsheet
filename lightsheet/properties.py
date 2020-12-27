@@ -49,8 +49,17 @@ class CausticPathLink(bpy.types.PropertyGroup):
         ])
 
 
+class CausticRefinementSetting(bpy.types.PropertyGroup):
+    """Settings for one refinement via the lightsheet.refine operator."""
+    adaptive_subdivision: bpy.props.BoolProperty(name="Adaptive Subdivision")
+    error_threshold: bpy.props.FloatProperty(name="Error Threshold")
+    span_faces: bpy.props.BoolProperty(name="Subdivide Edges Spanning Faces")
+    grow_boundary: bpy.props.BoolProperty(name="Grow Boundary")
+
+
 class CausticInfo(bpy.types.PropertyGroup):
-    """Information about the raypath to a caustic."""
+    """Information about raypath, refinement and finalization of a caustic."""
+    # raypath, set by lightsheet.create operator
     lightsheet: PointerProperty(
         type=bpy.types.Object,
         name="Lightsheet",
@@ -59,6 +68,17 @@ class CausticInfo(bpy.types.PropertyGroup):
         type=CausticPathLink,
         name="Lightsheet Path",
         description="Path of the lightrays to this caustic")
+    # refinement settings, extended by lightsheet.refine operator
+    refinements: CollectionProperty(
+        type=CausticRefinementSetting,
+        name="Refinements",
+        description="Settings used for refinements of this caustic"
+    )
+    # finalization, set by lightsheet.finalize operator
     finalized: BoolProperty(
         name="Finalized", description="If caustic has been finalized",
         default=False)
+    fade_boundary: bpy.props.BoolProperty(name="Fade Out Boundary")
+    remove_dim_faces: bpy.props.BoolProperty(name="Remove Dim Faces")
+    emission_cutoff: bpy.props.FloatProperty(name="Emit Strength Cutoff")
+    fix_overlap: bpy.props.BoolProperty(name="Cycles: Fix Overlap Artifacts")

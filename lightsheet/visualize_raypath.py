@@ -42,8 +42,7 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for caustics
-        obj = context.object
-        return obj is not None and obj.caustic_info.path
+        return context.object is not None and context.object.caustic_info.path
 
     def invoke(self, context, event):
         obj = context.object
@@ -71,12 +70,16 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
             reasons = f"{light_type.capitalize()} lights are not supported"
             return cancel(obj, reasons)
 
-        # count selected vertices and show confirmation dialog
+        # count selected vertices
         self.num_verts = sum(1 for vert in obj.data.vertices if vert.select)
-        return context.window_manager.invoke_props_dialog(self)
+
+        # show dialog window
+        wm = context.window_manager
+        return wm.invoke_props_dialog(self)
 
     def draw(self, context):
-        # draw info about selected vertices for user to confirm
+        # draw info about selected vertices for user to confirm, note that
+        # self.num_verts should not be changed after we set it in invoke
         txt = f"Visualize raypath for {self.num_verts:,} selected vertices?"
         self.layout.label(text=txt)
 
@@ -84,11 +87,11 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
         obj = context.object
 
         # visualize
+        tic = stopwatch()
         with trace.configure_for_trace(context) as depsgraph:
-            tic = stopwatch()
             trails = gather_trails(obj, depsgraph)
             path_obj = convert_trails_to_objects(trails, obj)
-            toc = stopwatch()
+        toc = stopwatch()
 
         # add path to caustic collection
         coll = utils.verify_collection_for_scene(context.scene, "caustics")

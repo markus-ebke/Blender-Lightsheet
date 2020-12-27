@@ -71,7 +71,10 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for caustics
-        return all(obj.caustic_info.path for obj in context.selected_objects)
+        if context.selected_objects:
+            return all(obj.caustic_info.path
+                       for obj in context.selected_objects)
+        return False
 
     def invoke(self, context, event):
         # cancel with error message
@@ -120,8 +123,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         caustics = list(context.selected_objects)
 
         # setup progress indicator
-        wm = context.window_manager
-        prog = utils.ProgressIndicator(len(caustics), wm)
+        prog = utils.ProgressIndicator(total_jobs=len(caustics))
 
         # refine caustics
         tic = stopwatch()
@@ -129,7 +131,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         with trace.configure_for_trace(context) as depsgraph:
             for caustic in caustics:
                 num_verts_before += len(caustic.data.vertices)
-                prog.start_job(caustic.name, total_tasks=4)
+                prog.start_job(caustic.name)
                 refine_caustic(caustic, depsgraph, relative_tolerance,
                                self.span_faces, self.grow_boundary, prog)
                 prog.stop_job()
@@ -153,6 +155,8 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
                    grow_boundary, prog):
     """Do one adaptive subdivision of caustic bmesh."""
+    prog.start_task("load mesh")
+
     # world to caustic object coordinate transformation
     world_to_caustic = caustic.matrix_world.inverted()
 
@@ -177,12 +181,12 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
     # coordinates of source position on lighsheet
     get_sheet, _ = utils.setup_sheet_property(caustic_bm)
 
-    # gather all edges that we have to split
+    # collect all edges that we have to split
     refine_edges = dict()  # {edge: sheet pos of midpoint}
     sheet_to_data = dict()  # {sheet pos: target data (trace.CausticData)}
 
-    # gather edges that need to be split but skip non-seams
-    prog.start_task("gathering edges", total_steps=len(caustic_bm.edges))
+    # collect edges that need adaptive splitting
+    prog.start_task("collecting edges", total_steps=len(caustic_bm.edges)+2)
     caustic_bm.edges.ensure_lookup_table()
     deleted_edges = set()
     for edge in caustic_bm.edges:
@@ -222,7 +226,6 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
 
         prog.update_progress(edge.index)
 
-    prog.start_task("growing boundary", total_steps=len(caustic_bm.edges))
     if grow_boundary:
         # edges that belong to a face where at least one edge will be deleted
         future_boundary_edges = set()
@@ -230,6 +233,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
             if any(edge in deleted_edges for edge in face.edges):
                 # face will disappear => new boundary edges
                 future_boundary_edges.update(face.edges)
+        prog.update_progress()
 
         # include all edges of (present or future) boundary faces
         for edge in caustic_bm.edges:
@@ -240,12 +244,12 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
                     vert1, vert2 = other_edge.verts
                     sheet_mid = (get_sheet(vert1) + get_sheet(vert2)) / 2
                     refine_edges[other_edge] = sheet_mid
-
-            prog.update_progress(edge.index)
+        prog.update_progress()
 
     # modify bmesh
-    prog.start_task("splitting edges", total_steps=5)
+    prog.start_task("refining edges", total_steps=6)
     split_verts, split_edges = split_caustic_edges(caustic_bm, refine_edges)
+    prog.update_progress()
     if grow_boundary:
         # find any offending vertices?
         is_growable = True
@@ -341,11 +345,23 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
     for vert in new_verts:
         vert.select_set(True)
     prog.update_progress()
-    prog.stop_task()
 
     # convert bmesh back to object
     caustic_bm.to_mesh(caustic.data)
     caustic_bm.free()
+    prog.stop_task()
+
+    # fill out caustic_info property
+    step = caustic.caustic_info.refinements.add()
+    step.adaptive_subdivision = relative_tolerance is not None
+    if relative_tolerance is not None:
+        step.error_threshold = relative_tolerance
+    else:
+        step.error_threshold = 0.0
+    step.span_faces = span_faces
+    step.grow_boundary = grow_boundary
+
+    return caustic
 
 
 def split_caustic_edges(caustic_bm, refine_edges):

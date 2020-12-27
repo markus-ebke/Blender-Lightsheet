@@ -55,7 +55,9 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for light objects
-        return all(obj.type == 'LIGHT' for obj in context.selected_objects)
+        if context.selected_objects:
+            return all(obj.type == 'LIGHT' for obj in context.selected_objects)
+        return False
 
     def invoke(self, context, event):
         # cancel operator for area lights
@@ -75,10 +77,8 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
     def execute(self, context):
         # create lightsheets for every selected object (will all be lamps)
         tic = stopwatch()
-        lightsheets = []
-        for obj in context.selected_objects:
-            lightsheet = setup_lightsheet(obj, self.resolution)
-            lightsheets.append(lightsheet)
+        lightsheets = [setup_lightsheet(obj, self.resolution)
+                       for obj in context.selected_objects]
         toc = stopwatch()
 
         # add lightsheets to the right scene collection

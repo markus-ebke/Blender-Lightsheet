@@ -49,6 +49,11 @@ class LIGHTSHEET_PT_tools(Panel):
         col.operator("lightsheet.refine", icon='MOD_MULTIRES')
         col.operator("lightsheet.finalize", icon='OUTPUT')
 
+        # place animated trace operator visually separate from the others
+        col = layout.column()
+        col.scale_y = 1.5
+        col.operator("lightsheet.animate", icon='RENDER_ANIMATION')
+
         # info about the active object and selected objects
         box = layout.box()
         if context.object:
@@ -118,23 +123,30 @@ class LIGHTSHEET_PT_caustic(Panel):
     def draw(self, context):
         layout = self.layout
         caustic = context.object
+        caustic_info = caustic.caustic_info
 
         # display caustic info and raypath operator
-        display_caustic_raypath(caustic.caustic_info, layout.column())
-        layout.operator("lightsheet.visualize", icon='CURVE_PATH')
+        box = layout.box().column(align=True)
+        display_caustic_raypath(caustic_info, box)
+        box.operator("lightsheet.visualize", icon='CURVE_PATH')
 
-        box = layout.box()
+        # display refinement settings
+        box = layout.box().column(align=True)
+        display_caustic_refinement(caustic_info, box)
+
+        # display finalization
+        box = layout.box().column(align=True)
+        display_caustic_finalization(caustic_info, box)
 
         # display mesh stats
-        data = caustic.data
-        box.label(text="Info about active mesh:")
-        box.label(text=f"Verts: {len(data.vertices):,}", icon='VERTEXSEL')
-        box.label(text=f"Edges: {len(data.edges):,}", icon='EDGESEL')
-        box.label(text=f"Faces: {len(data.polygons):,}", icon='FACESEL')
+        box = layout.box().column(align=True)
+        display_mesh_info(caustic.data, box)
 
 
 def display_caustic_raypath(caustic_info, layout):
     """Display info about caustic raypath."""
+    layout.label(text=f"Raypath info: ({len(caustic_info.path)-1} bounces)")
+
     # lightsheet info
     lightsheet = caustic_info.lightsheet
     if lightsheet is not None:
@@ -153,6 +165,43 @@ def display_caustic_raypath(caustic_info, layout):
         else:
             obj_name = "<object not found>"
         layout.label(text=f"{interaction}: {obj_name}")
+
+
+def display_caustic_refinement(caustic_info, layout):
+    """Display info about refinement steps."""
+    layout.label(
+        text=f"Refinement info: ({len(caustic_info.refinements)} steps)")
+
+    for idx, step in enumerate(caustic_info.refinements):
+        if step.adaptive_subdivision:
+            adaptive = f"{step.error_threshold:.2f}"
+        else:
+            adaptive = "none"
+        span = "span" if step.span_faces else "    "
+        grow = "grow" if step.grow_boundary else "    "
+        txt = f"Refinement {idx+1}: {adaptive}, {span}, {grow}"
+        layout.label(text=txt)
+
+
+def display_caustic_finalization(caustic_info, layout):
+    """Display finalization settings."""
+    layout.label(text=f"Finalized: {caustic_info.finalized}")
+
+    if caustic_info.finalized:
+        layout.label(text=f"Fade out boundary: {caustic_info.fade_boundary}")
+        layout.label(text=f"Remove dim faces: {caustic_info.remove_dim_faces}")
+        if caustic_info.remove_dim_faces:
+            cutoff = caustic_info.emission_cutoff
+            layout.label(text=f"    Cutoff: {cutoff:.5f}")
+        layout.label(text=f"Fix overlap: {caustic_info.fix_overlap}")
+
+
+def display_mesh_info(data, layout):
+    """Display number of vertices, edges and faces of given mesh datablock."""
+    layout.label(text="Mesh info:")
+    layout.label(text=f"Verts: {len(data.vertices):,}", icon='VERTEXSEL')
+    layout.label(text=f"Edges: {len(data.edges):,}", icon='EDGESEL')
+    layout.label(text=f"Faces: {len(data.polygons):,}", icon='FACESEL')
 
 
 class LIGHTSHEET_PT_raypath(Panel):

@@ -86,7 +86,10 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for caustics
-        return all(obj.caustic_info.path for obj in context.selected_objects)
+        if context.selected_objects:
+            return all(obj.caustic_info.path
+                       for obj in context.selected_objects)
+        return False
 
     def invoke(self, context, event):
         # cancel with error message
@@ -124,6 +127,8 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
+        caustics = context.selected_objects
+
         # set emission cutoff
         if self.remove_dim_faces:
             emission_cutoff = self.emission_cutoff
@@ -131,23 +136,19 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
             emission_cutoff = None
 
         # setup progress indicator
-        wm = context.window_manager
-        prog = utils.ProgressIndicator(len(context.selected_objects), wm)
+        prog = utils.ProgressIndicator(total_jobs=len(caustics))
 
         # finalize selected caustics
         tic = stopwatch()
         finalized, deleted = 0, 0
-        for caustic in context.selected_objects:
-            prog.start_job(caustic.name, total_tasks=3)
-            finalize_caustic(caustic, self.fade_boundary, emission_cutoff,
-                             self.fix_overlap, prog)
-
-            if self.delete_empty_caustics and len(caustic.data.polygons) == 0:
-                # delete caustic object
-                bpy.data.objects.remove(caustic)
+        for caustic in caustics:
+            prog.start_job(caustic.name)
+            result = finalize_caustic(caustic, self.fade_boundary,
+                                      emission_cutoff, self.fix_overlap,
+                                      self.delete_empty_caustics, prog)
+            if result is None:
                 deleted += 1
             else:
-                # count as finalized
                 finalized += 1
             prog.stop_job()
         prog.end()
@@ -167,27 +168,32 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
 def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap,
-                     prog):
+                     delete_empty, prog):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
     caustic_bm.from_mesh(caustic.data)
 
     # fade out boundary
-    prog.start_task("fading out boundary")
     if fade_boundary:
+        prog.start_task("fading out boundary")
         fadeout_caustic_boundary(caustic_bm)
 
     # remove dim faces
-    prog.start_task("removing dim faces")
     if emission_cutoff is not None:
+        prog.start_task("removing dim faces")
         light = caustic.caustic_info.lightsheet.parent
-        assert light is not None and light.type == 'LIGHT', (caustic, light)
         remove_dim_faces(caustic_bm, light, emission_cutoff)
 
+        # if wanted by user delete caustic objects without faces
+        if delete_empty and len(caustic_bm.faces) == 0:
+            bpy.data.objects.remove(caustic)
+            return None
+
     # stack overlapping faces in layers
-    prog.start_task("fixing overlap")
     if fix_overlap:
+        prog.start_task("fixing overlap")
+
         # derive offset from complexity of raypath chain so that different
         # caustics are also separated
         chain = []
@@ -203,7 +209,15 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap,
     caustic_bm.free()
 
     # mark as finalized
-    caustic.caustic_info.finalized = True
+    caustic_info = caustic.caustic_info
+    caustic_info.finalized = True
+    caustic_info.fade_boundary = fade_boundary
+    caustic_info.remove_dim_faces = emission_cutoff is not None
+    if emission_cutoff is not None:
+        caustic_info.emission_cutoff = emission_cutoff
+    caustic_info.fix_overlap = fix_overlap
+
+    return caustic
 
 
 def fadeout_caustic_boundary(caustic_bm):
@@ -216,6 +230,8 @@ def fadeout_caustic_boundary(caustic_bm):
 
 def remove_dim_faces(caustic_bm, light, emission_cutoff):
     """Remove invisible faces and cleanup resulting mesh."""
+    assert light is not None and light.type == 'LIGHT', light
+
     # emission strength and color from caustic
     squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
     color_layer = caustic_bm.loops.layers.color["Caustic Tint"]

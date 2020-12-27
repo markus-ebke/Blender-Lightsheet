@@ -208,7 +208,7 @@ def trace_scene(ray, depsgraph, max_bounces):
                     chain = old_chain + (Link(obj, kind, None),)
                     cdata = CausticData(location, color, uv, perp, face_index)
                     caustic_data.append((chain, cdata))
-            elif len(old_chain) <= max_bounces:
+            elif len(old_chain) < max_bounces:
                 assert new_direction is not None
 
                 # move the starting point a safe distance away from the object

@@ -60,11 +60,13 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
     @classmethod
     def poll(cls, context):
         # operator makes sense only for lightsheets (must have light as parent)
-        for obj in context.selected_objects:
-            if (obj.type != 'MESH' or obj.parent is None
-                    or obj.parent.type != 'LIGHT'):
-                return False
-        return True
+        def is_light(obj):
+            return obj is not None and obj.type == 'LIGHT'
+
+        if context.selected_objects:
+            return all(obj.type == 'MESH' and is_light(obj.parent)
+                       for obj in context.selected_objects)
+        return False
 
     def invoke(self, context, event):
         # cancel operator for area lights
@@ -87,8 +89,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
                        for obj in context.selected_objects]
 
         # setup progress indicator
-        wm = context.window_manager
-        prog = utils.ProgressIndicator(len(lightsheets), wm)
+        prog = utils.ProgressIndicator(total_jobs=len(lightsheets))
 
         # raytrace lightsheet and gather all caustics, note that caustics are
         # not yet linked to scene collection, so they will not interfere with
@@ -98,7 +99,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         all_caustics = []
         with trace.configure_for_trace(context) as depsgraph:
             for lightsheet in lightsheets:
-                prog.start_job(lightsheet.name, total_tasks=4)
+                prog.start_job(lightsheet.name)
                 caustics = trace_lightsheet(lightsheet, depsgraph,
                                             self.max_bounces,
                                             self.dismiss_empty_caustics, prog)
@@ -177,9 +178,9 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
 
     # convert to Blender objects
     prog.start_task("converting to objects", total_steps=len(traced))
-    caustics = []
     traced_sorted = sorted(traced.items(),
                            key=lambda item: utils.chain_complexity(item[0]))
+    caustics = []
     for item in traced_sorted:
         chain, sheet_to_data = item
         caustic = convert_caustic_to_objects(lightsheet, chain, sheet_to_data)
