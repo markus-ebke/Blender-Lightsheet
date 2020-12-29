@@ -25,7 +25,7 @@ LIGHTSHEET_OT_trace_lighsheet: Operator for tracing lightsheet
 Helper functions:
 - verify_object_is_lighsheet
 - trace_lightsheet
-- convert_caustics_to_objects
+- convert_caustics_to_object
 - setup_caustic_bmesh
 - fill_caustic_faces
 """
@@ -183,24 +183,25 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
     caustics = []
     for item in traced_sorted:
         chain, sheet_to_data = item
-        caustic = convert_caustic_to_objects(lightsheet, chain, sheet_to_data)
-
-        # if wanted by user delete empty caustics
-        if dismiss_empty and len(caustic.data.polygons) == 0:
-            bpy.data.objects.remove(caustic)
-        else:
+        caustic = convert_caustic_to_object(lightsheet, chain, sheet_to_data,
+                                            dismiss_empty)
+        if caustic is not None:
             caustics.append(caustic)
         prog.update_progress()
 
     return caustics
 
 
-def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
+def convert_caustic_to_object(lightsheet, chain, sheet_to_data, dismiss_empty):
     """Convert caustic bmesh to Blender object with filled in faces."""
     # setup and fill caustic bmesh
     caustic_bm = setup_caustic_bmesh(sheet_to_data)
     fill_caustic_faces(caustic_bm, lightsheet)
     utils.bmesh_delete_loose(caustic_bm)
+    if dismiss_empty and len(caustic_bm.faces) == 0:
+        return None
+
+    # paint caustic
     utils.set_caustic_squeeze(caustic_bm, matrix_sheet=lightsheet.matrix_world)
     utils.set_caustic_face_data(caustic_bm, sheet_to_data)
 
@@ -249,6 +250,14 @@ def convert_caustic_to_objects(lightsheet, chain, sheet_to_data):
     # add material
     mat = material.get_caustic_material(lightsheet.parent, parent_obj)
     caustic.data.materials.append(mat)
+
+    # for Cycles we need to make the caustic visible to diffuse rays only
+    caustic.cycles_visibility.camera = False
+    caustic.cycles_visibility.diffuse = True
+    caustic.cycles_visibility.glossy = False
+    caustic.cycles_visibility.transmission = False
+    caustic.cycles_visibility.scatter = False
+    caustic.cycles_visibility.shadow = False
 
     return caustic
 

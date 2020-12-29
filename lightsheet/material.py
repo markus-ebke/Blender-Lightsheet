@@ -512,7 +512,7 @@ def add_nodes_for_cycles(node_tree, light):
     nodes = node_tree.nodes
     output = nodes.new(type='ShaderNodeOutputMaterial')
     mix_shader = nodes.new(type='ShaderNodeMixShader')
-    path = nodes.new(type='ShaderNodeLightPath')
+    geometry = nodes.new(type='ShaderNodeNewGeometry')
     add_shader = nodes.new(type='ShaderNodeAddShader')
     transparent = nodes.new(type='ShaderNodeBsdfTransparent')
     emission = nodes.new(type='ShaderNodeEmission')
@@ -527,7 +527,7 @@ def add_nodes_for_cycles(node_tree, light):
     # change location
     output.location = (300, 700)
     mix_shader.location = (60, 700)
-    path.location = (-180, 700)
+    geometry.location = (-180, 700)
     add_shader.location = (-180, 575)
     transparent.location = (-420, 650)
     emission.location = (-420, 400)
@@ -541,9 +541,9 @@ def add_nodes_for_cycles(node_tree, light):
 
     # change settings
     output.target = 'CYCLES'
-    for option in path.outputs:
+    for option in geometry.outputs:
         # hide unused output options
-        if option.name != 'Is Diffuse Ray':
+        if option.name != 'Backfacing':
             option.hide = True
     mix_rgb.blend_type = 'MULTIPLY'
     mix_rgb.inputs['Fac'].default_value = 1.0
@@ -556,7 +556,7 @@ def add_nodes_for_cycles(node_tree, light):
     # add links
     links = node_tree.links
     links.new(mix_shader.outputs[0], output.inputs[0])
-    links.new(path.outputs['Is Diffuse Ray'], mix_shader.inputs[0])
+    links.new(geometry.outputs['Backfacing'], mix_shader.inputs[0])
     links.new(transparent.outputs[0], mix_shader.inputs[1])
     links.new(add_shader.outputs[0], mix_shader.inputs[2])
     links.new(transparent.outputs[0], add_shader.inputs[0])

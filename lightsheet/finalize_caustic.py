@@ -68,7 +68,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         name="Emit Strength Cutoff",
         description="Remove face if their emission strength (in W/m^2) is "
         "lower than this value (note: current light strength is included)",
-        default=0.0001, min=0.0, precision=5
+        default=0.001, min=0.0, precision=4
     )
     delete_empty_caustics: bpy.props.BoolProperty(
         name="Delete Empty Caustics",
@@ -192,8 +192,6 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap,
 
     # stack overlapping faces in layers
     if fix_overlap:
-        prog.start_task("fixing overlap")
-
         # derive offset from complexity of raypath chain so that different
         # caustics are also separated
         chain = []
@@ -201,7 +199,8 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap,
             chain.append(trace.Link(item.object, item.kind, None))
         offset = 1e-4 * utils.chain_complexity(chain)
 
-        stack_overlapping_in_levels(caustic_bm, caustic.matrix_world, offset)
+        stack_overlapping_in_levels(caustic_bm, caustic.matrix_world, offset,
+                                    prog)
     prog.stop_task()
 
     # convert bmesh back to object
@@ -264,10 +263,15 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
     utils.bmesh_delete_loose(caustic_bm)
 
 
-def stack_overlapping_in_levels(bm, matrix_world, offset, separation=1e-4):
+def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
+                                separation=1e-4):
     """Stack intersecting faces such that they don't overlap anymore."""
+    prog.start_task("fixing overlap", total_steps=3)
+
     # find affine planes and the faces they contain
     affine_planes = collect_by_plane(bm, safe_distance=100*separation)
+    prog.total_steps = 2 + len(affine_planes)
+    prog.update_progress()
 
     # assign to each face a level
     level_to_faces = defaultdict(list)
@@ -279,6 +283,8 @@ def stack_overlapping_in_levels(bm, matrix_world, offset, separation=1e-4):
 
         for level, indices in enumerate(groups):
             level_to_faces[level].extend(faces[idx] for idx in indices)
+
+        prog.update_progress()
 
     # split off and elevate faces
     world_to_local = matrix_world.inverted()
@@ -298,6 +304,8 @@ def stack_overlapping_in_levels(bm, matrix_world, offset, separation=1e-4):
             # displace in world coordinates and transform to local coordinates
             displacement = (offset + level * separation) * world_normal
             vert.co = world_to_local @ (location + displacement)
+
+    prog.update_progress()
 
 
 def collect_by_plane(bm, safe_distance=1e-4):

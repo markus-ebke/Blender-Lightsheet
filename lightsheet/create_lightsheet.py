@@ -287,9 +287,10 @@ def convert_bmesh_to_lightsheet(bm, light):
     lightsheet.display_type = 'WIRE'
     lightsheet.hide_render = True
     lightsheet.cycles_visibility.camera = False
-    lightsheet.cycles_visibility.shadow = False
     lightsheet.cycles_visibility.diffuse = False
+    lightsheet.cycles_visibility.glossy = False
     lightsheet.cycles_visibility.transmission = False
     lightsheet.cycles_visibility.scatter = False
+    lightsheet.cycles_visibility.shadow = False
 
     return lightsheet
