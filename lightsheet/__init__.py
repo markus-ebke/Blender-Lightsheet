@@ -43,6 +43,7 @@ if "bpy" in locals():
     importlib.reload(refine_caustic)
     importlib.reload(finalize_caustic)
     importlib.reload(visualize_raypath)
+    importlib.reload(animated_trace)
     importlib.reload(properties)
     importlib.reload(ui)
 
@@ -53,6 +54,7 @@ else:
                             refine_caustic,
                             finalize_caustic,
                             visualize_raypath,
+                            animated_trace,
                             properties,
                             ui)
 
@@ -72,6 +74,7 @@ classes = (
     refine_caustic.LIGHTSHEET_OT_refine_caustic,
     finalize_caustic.LIGHTSHEET_OT_finalize_caustic,
     visualize_raypath.LIGHTSHEET_OT_visualize_raypath,
+    animated_trace.LIGHTSHEET_OT_animated_trace,
     properties.CausticPathLink,
     properties.CausticRefinementSetting,
     properties.CausticInfo,

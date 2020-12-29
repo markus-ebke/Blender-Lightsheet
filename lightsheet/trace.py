@@ -101,7 +101,6 @@ def setup_lightsheet_first_ray(lightsheet):
     origin = sheet_to_world.to_translation()
 
     # setup first ray of given vertex coordinate depending on light type
-    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
     white = (1.0, 1.0, 1.0)
     if lightsheet.parent.data.type == 'SUN':
         # parallel projection along -z axis (local coordinates)

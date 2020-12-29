@@ -272,7 +272,7 @@ def convert_bmesh_to_lightsheet(bm, light):
     utils.verify_lightsheet_layers(bm)
 
     # think of a good name
-    name = f"Lightsheet for {light.name}"
+    name = f"{light.name} Lightsheet"
 
     # convert bmesh to mesh data block
     me = bpy.data.meshes.new(name)

@@ -150,6 +150,8 @@ def verify_lightsheet(obj, scene):
 
 def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
     """Trace rays from lighsheet and return list of caustics."""
+    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
+
     # convert lightsheet to bmesh
     lightsheet_bm = bmesh.new(use_operators=False)
     lightsheet_bm.from_mesh(lightsheet.data)
@@ -220,7 +222,7 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data, dismiss_empty):
         assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
 
     # think of a good name
-    name = f"Caustic of {lightsheet.name} on {parent_obj.name}"
+    name = f"{lightsheet.parent.name} on {parent_obj.name} Caustic"
 
     # new mesh data block
     me = bpy.data.meshes.new(name)
