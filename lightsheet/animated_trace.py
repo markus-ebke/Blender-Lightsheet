@@ -99,8 +99,12 @@ class LIGHTSHEET_OT_animated_trace(Operator):
         row.prop(self, "frame_start", text="Start")
         row.prop(self, "frame_end", text="End")
 
+        # show time and memory warning
+        msg = "This will take a long time and use a lot of memory"
+        self.layout.label(text=msg, icon='ERROR')
+
         # show how to cancel compuations
-        msg = "Press Ctrl-C in the console window to cancel"
+        msg = "To cancel press Ctrl-C in the console window"
         self.layout.label(text=msg, icon='INFO')
 
     def execute(self, context):
@@ -108,21 +112,23 @@ class LIGHTSHEET_OT_animated_trace(Operator):
         frame_current = context.scene.frame_current
         reference_caustics = context.selected_objects[:]
 
-        # show progress via window manager progress counter
-        wm.progress_begin(self.frame_start, self.frame_end + 1)
-
-        # animated trace
+        # animated trace, show progress via window manager progress counter
         tic = stopwatch()
+        wm.progress_begin(self.frame_start, self.frame_end + 1)
         for frame in range(self.frame_start, self.frame_end + 1):
             # update window manager progress counter
             wm.progress_update(frame)
-            print(f"Lightsheet: Animate trace for frame {frame}")
+            print(f"Lightsheet: Animating trace for frame {frame}")
 
             context.scene.frame_set(frame)
-            if frame != frame_current:
-                new_caustics = auto_trace(context, reference_caustics, frame)
-            else:
+            if frame == frame_current:
+                # caustics for this frame are the reference caustics
+                for obj in reference_caustics:
+                    obj.name = f"{obj.name} f{frame_current:0>3}"
                 new_caustics = reference_caustics
+            else:
+                # trace caustics for this frame
+                new_caustics = auto_trace(context, reference_caustics, frame)
 
             # check for errors
             if new_caustics is None:
@@ -142,17 +148,14 @@ class LIGHTSHEET_OT_animated_trace(Operator):
                 obj.keyframe_insert(data_path="hide_render", frame=frame - 1)
                 obj.keyframe_insert(data_path="hide_viewport", frame=frame + 1)
                 obj.keyframe_insert(data_path="hide_render", frame=frame + 1)
+
+        # reset scene
         wm.progress_update(self.frame_end + 1)
-
-        # reset scene and give reference caustics the correct name
         context.scene.frame_set(frame_current)
-        for obj in reference_caustics:
-            obj.name = f"{obj.name} f{frame_current:0>4}"
-
-        toc = stopwatch()
 
         # stop window indicator
         wm.progress_end()
+        toc = stopwatch()
 
         # report statistics
         c_stats = f"{len(reference_caustics)} caustics(s)"
@@ -208,10 +211,25 @@ def auto_trace(context, reference_caustics, frame):
         # find matching reference caustic, if none remove caustic
         if path_key in path_to_reference:
             ref_obj = path_to_reference[path_key]
+            assert obj.parent == ref_obj.parent, (obj.parent, ref_obj.parent)
             caustic_and_reference.append((obj, ref_obj))
 
-            # give the new caustic a better name
-            obj.name = f"{ref_obj.name} f{frame:0>4}"
+            # add frame number to the name of the new caustic
+            ref_name = ref_obj.name
+            if ref_name[-3:].isnumeric() and ref_name[-5:-3] == " f":
+                ref_name = ref_name[:-5]
+            obj.name = f"{ref_name} f{frame:0>3}"
+
+            # copy offset of shrinkwrap modifier from reference
+            mod = obj.modifiers.get("Shrinkwrap")
+            ref_mod = ref_obj.modifiers.get("Shrinkwrap")
+            if ref_mod is not None:
+                assert ref_mod.type == 'SHRINKWRAP', ref_mod
+                assert ref_mod.target == obj.parent, ref_mod.target
+                assert mod is not None and mod.type == 'SHRINKWRAP', mod
+                assert mod.target == obj.parent, mod.target
+
+                mod.offset = ref_mod.offset
         else:
             bpy.data.objects.remove(obj)
 

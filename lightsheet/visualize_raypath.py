@@ -50,7 +50,8 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
 
         # cancel with error message
         def cancel(obj, reasons):
-            msg = f"Cannot visualize raypath for {obj.name} because {reasons}!"
+            verb = "visualize raypath for"
+            msg = f"Cannot {verb} '{obj.name}' because {reasons}!"
             self.report({"ERROR"}, msg)
             return {'CANCELLED'}
 
@@ -139,9 +140,6 @@ def gather_trails(caustic, depsgraph):
             msg = "Existing caustic vertex cannot be projected?!"
             raise RuntimeError(msg)
 
-        # for last vertex add offset so that trail is flush with the caustic
-        position = cdata.location + 1e-4 * cdata.perp
-        trail[-1] = position
         trails.append(trail)
 
     # free caustic bmesh

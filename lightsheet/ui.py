@@ -192,8 +192,12 @@ def display_caustic_finalization(caustic_info, layout):
         layout.label(text=f"Remove dim faces: {caustic_info.remove_dim_faces}")
         if caustic_info.remove_dim_faces:
             cutoff = caustic_info.emission_cutoff
-            layout.label(text=f"    Cutoff: {cutoff:.5f}")
+            layout.label(text=f"    Cutoff: {cutoff:.4f} W/m^2")
+
         layout.label(text=f"Fix overlap: {caustic_info.fix_overlap}")
+        if caustic_info.fix_overlap > 0:
+            offset = caustic_info.shrinkwrap_offset
+            layout.label(text=f"    Shrinkwrap: {offset:.4f}m")
 
 
 def display_mesh_info(data, layout):

@@ -82,3 +82,4 @@ class CausticInfo(bpy.types.PropertyGroup):
     remove_dim_faces: bpy.props.BoolProperty(name="Remove Dim Faces")
     emission_cutoff: bpy.props.FloatProperty(name="Emit Strength Cutoff")
     fix_overlap: bpy.props.BoolProperty(name="Cycles: Fix Overlap Artifacts")
+    shrinkwrap_offset: bpy.props.FloatProperty(name="Shrinkwrap Offset")

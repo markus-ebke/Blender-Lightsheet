@@ -45,7 +45,7 @@ import bpy
 from bpy.types import Operator
 from mathutils import Matrix
 
-from lightsheet import trace, utils
+from lightsheet import utils
 
 
 class LIGHTSHEET_OT_finalize_caustic(Operator):
@@ -66,8 +66,8 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     )
     emission_cutoff: bpy.props.FloatProperty(
         name="Emit Strength Cutoff",
-        description="Remove face if their emission strength (in W/m^2) is "
-        "lower than this value (note: current light strength is included)",
+        description="Remove face if its emission strength (in W/m^2) is lower "
+        "than this value (includes the current light strength)",
         default=0.001, min=0.0, precision=4
     )
     delete_empty_caustics: bpy.props.BoolProperty(
@@ -78,8 +78,9 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     fix_overlap: bpy.props.BoolProperty(
         name="Cycles: Fix Overlap Artifacts",
         description="WARNING: SLOW! Prevent render artifacts in Cycles caused "
-        "by overlapping faces, will find intersecting faces (slow!) and stack "
-        "them on top of each other",
+        "by overlapping faces, will find intersecting faces and stack them on "
+        "top of each other. Use the offset of the shrinkwrap modifiers first "
+        "to separate different caustics from each other!",
         default=False
     )
 
@@ -94,7 +95,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     def invoke(self, context, event):
         # cancel with error message
         def cancel(obj, reasons):
-            msg = f"Can't finalize '{obj.name}' because {reasons}!"
+            msg = f"Cannot finalize '{obj.name}' because {reasons}!"
             self.report({"ERROR"}, msg)
             return {'CANCELLED'}
 
@@ -144,8 +145,9 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         for caustic in caustics:
             prog.start_job(caustic.name)
             result = finalize_caustic(caustic, self.fade_boundary,
-                                      emission_cutoff, self.fix_overlap,
-                                      self.delete_empty_caustics, prog)
+                                      emission_cutoff,
+                                      self.delete_empty_caustics,
+                                      self.fix_overlap, prog)
             if result is None:
                 deleted += 1
             else:
@@ -167,8 +169,8 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
-def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap,
-                     delete_empty, prog):
+def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
+                     fix_overlap, prog):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
@@ -189,25 +191,34 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap,
         if delete_empty and len(caustic_bm.faces) == 0:
             bpy.data.objects.remove(caustic)
             return None
+    prog.stop_task()
 
     # stack overlapping faces in layers
     if fix_overlap:
-        # derive offset from complexity of raypath chain so that different
-        # caustics are also separated
-        chain = []
-        for item in caustic.caustic_info.path:
-            chain.append(trace.Link(item.object, item.kind, None))
-        offset = 1e-4 * utils.chain_complexity(chain)
+        prog.start_task("fixing overlap", total_steps=3)
 
+        # remove shrinkwrap modifier because we need to apply it by hand
+        mod = caustic.modifiers.get("Shrinkwrap")
+        if mod is not None:
+            offset = mod.offset
+            caustic.modifiers.remove(mod)
+        else:
+            # modifier must have been removed by hand
+            assert False, list(caustic.modifiers)
+            offset = 0.0
+
+        # stack
         stack_overlapping_in_levels(caustic_bm, caustic.matrix_world, offset,
                                     prog)
-    prog.stop_task()
+        prog.stop_task()
+    else:
+        offset = 0.0
 
     # convert bmesh back to object
     caustic_bm.to_mesh(caustic.data)
     caustic_bm.free()
 
-    # mark as finalized
+    # fill out caustic_info property
     caustic_info = caustic.caustic_info
     caustic_info.finalized = True
     caustic_info.fade_boundary = fade_boundary
@@ -215,6 +226,7 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, fix_overlap,
     if emission_cutoff is not None:
         caustic_info.emission_cutoff = emission_cutoff
     caustic_info.fix_overlap = fix_overlap
+    caustic_info.shrinkwrap_offset = offset
 
     return caustic
 
@@ -264,10 +276,8 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
 
 
 def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
-                                separation=1e-4):
+                                separation=2e-4):
     """Stack intersecting faces such that they don't overlap anymore."""
-    prog.start_task("fixing overlap", total_steps=3)
-
     # find affine planes and the faces they contain
     affine_planes = collect_by_plane(bm, safe_distance=100*separation)
     prog.total_steps = 2 + len(affine_planes)

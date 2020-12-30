@@ -79,7 +79,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     def invoke(self, context, event):
         # cancel with error message
         def cancel(obj, reasons):
-            msg = f"Can't refine '{obj.name}' because {reasons}!"
+            msg = f"Cannot refine '{obj.name}' because {reasons}!"
             self.report({"ERROR"}, msg)
             return {'CANCELLED'}
 
@@ -214,12 +214,9 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
                 deleted_edges.add(edge)
                 refine_edges[edge] = sheet_mid
             else:
-                # projected midpoint with offset
-                position = cdata.location + 1e-4 * cdata.perp
-                mid_target = world_to_caustic @ position
-
                 # calc error and whether we should keep the edge
                 edge_mid = (vert1.co + vert2.co) / 2
+                mid_target = world_to_caustic @ cdata.location
                 rel_err = (edge_mid - mid_target).length / edge.calc_length()
                 if rel_err >= relative_tolerance:
                     refine_edges[edge] = sheet_mid
@@ -299,9 +296,8 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
             dead_verts.append(vert)
             del sheet_to_data[sheet_key]
         else:
-            # set correct vertex coordinates and face index
-            position = cdata.location + 1e-4 * cdata.perp
-            vert.co = world_to_caustic @ position
+            # set vertex coordinates and face index
+            vert.co = world_to_caustic @ cdata.location
             vert[face_index] = cdata.face_index
     prog.update_progress()
 

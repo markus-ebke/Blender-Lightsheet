@@ -60,15 +60,20 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         return False
 
     def invoke(self, context, event):
+        # cancel with error message
+        def cancel(obj, reasons):
+            verb = "create lightsheet for"
+            msg = f"Cannot {verb} '{obj.name}' because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
+
         # cancel operator for area lights
         for obj in context.selected_objects:
             assert obj.type == 'LIGHT', (obj, obj.type)  # poll failed us!
             light_type = obj.data.type
             if light_type not in ('SUN', 'SPOT', 'POINT'):
                 reasons = f"{light_type.lower()} lights are not supported"
-                msg = f"Can't create sheet for '{obj.name}' because {reasons}!"
-                self.report({"ERROR"}, msg)
-                return {'CANCELLED'}
+                return cancel(obj, reasons)
 
         # set resolution via dialog window
         wm = context.window_manager

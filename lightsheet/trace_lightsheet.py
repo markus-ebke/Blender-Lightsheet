@@ -28,6 +28,7 @@ Helper functions:
 - convert_caustics_to_object
 - setup_caustic_bmesh
 - fill_caustic_faces
+- chain_complexity
 """
 
 from collections import defaultdict
@@ -48,13 +49,9 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
 
     max_bounces: bpy.props.IntProperty(
         name="Max Bounces",
-        description="Maximum number of light bounces to a diffuse surface",
+        description="Maximum number of glossy/transmission/transparent "
+        "bounces until hitting a diffuse surface",
         default=4, min=0
-    )
-    dismiss_empty_caustics: bpy.props.BoolProperty(
-        name="Dismiss Empty Caustics",
-        description="Don't create caustics that would end up with no faces",
-        default=True
     )
 
     @classmethod
@@ -69,15 +66,19 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         return False
 
     def invoke(self, context, event):
+        # cancel with error message
+        def cancel(obj, reasons):
+            msg = f"Cannot trace '{obj.name}' because {reasons}!"
+            self.report({"ERROR"}, msg)
+            return {'CANCELLED'}
+
         # cancel operator for area lights
         for obj in context.selected_objects:
             assert obj.parent is not None, obj  # poll failed us!
             light_type = obj.parent.data.type
             if light_type not in ('SUN', 'SPOT', 'POINT'):
                 reasons = f"{light_type.lower()} lights are not supported"
-                msg = f"Can't trace '{obj.name}' because {reasons}!"
-                self.report({"ERROR"}, msg)
-                return {'CANCELLED'}
+                return cancel(obj, reasons)
 
         # set properties via dialog window
         wm = context.window_manager
@@ -101,8 +102,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
             for lightsheet in lightsheets:
                 prog.start_job(lightsheet.name)
                 caustics = trace_lightsheet(lightsheet, depsgraph,
-                                            self.max_bounces,
-                                            self.dismiss_empty_caustics, prog)
+                                            self.max_bounces, prog)
                 prog.stop_job()
                 all_caustics.extend(caustics)
             prog.end()
@@ -148,7 +148,7 @@ def verify_lightsheet(obj, scene):
     return obj
 
 
-def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
+def trace_lightsheet(lightsheet, depsgraph, max_bounces, prog):
     """Trace rays from lighsheet and return list of caustics."""
     assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
 
@@ -181,12 +181,11 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
     # convert to Blender objects
     prog.start_task("converting to objects", total_steps=len(traced))
     traced_sorted = sorted(traced.items(),
-                           key=lambda item: utils.chain_complexity(item[0]))
+                           key=lambda item: chain_complexity(item[0]))
     caustics = []
     for item in traced_sorted:
         chain, sheet_to_data = item
-        caustic = convert_caustic_to_object(lightsheet, chain, sheet_to_data,
-                                            dismiss_empty)
+        caustic = convert_caustic_to_object(lightsheet, chain, sheet_to_data)
         if caustic is not None:
             caustics.append(caustic)
         prog.update_progress()
@@ -194,13 +193,15 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, dismiss_empty, prog):
     return caustics
 
 
-def convert_caustic_to_object(lightsheet, chain, sheet_to_data, dismiss_empty):
+def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
     """Convert caustic bmesh to Blender object with filled in faces."""
     # setup and fill caustic bmesh
     caustic_bm = setup_caustic_bmesh(sheet_to_data)
     fill_caustic_faces(caustic_bm, lightsheet)
     utils.bmesh_delete_loose(caustic_bm)
-    if dismiss_empty and len(caustic_bm.faces) == 0:
+
+    # dismiss caustics without faces
+    if len(caustic_bm.faces) == 0:
         return None
 
     # paint caustic
@@ -242,13 +243,6 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data, dismiss_empty):
     caustic = bpy.data.objects.new(name, me)
     caustic.parent = parent_obj
 
-    # fill out caustic_info property
-    caustic.caustic_info.lightsheet = lightsheet
-    for obj, kind, _ in chain:
-        item = caustic.caustic_info.path.add()
-        item.object = obj
-        item.kind = kind
-
     # add material
     mat = material.get_caustic_material(lightsheet.parent, parent_obj)
     caustic.data.materials.append(mat)
@@ -260,6 +254,19 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data, dismiss_empty):
     caustic.cycles_visibility.transmission = False
     caustic.cycles_visibility.scatter = False
     caustic.cycles_visibility.shadow = False
+
+    # add shrinkwrap modifier
+    mod = caustic.modifiers.new(name="Shrinkwrap", type='SHRINKWRAP')
+    mod.wrap_mode = 'ABOVE_SURFACE'
+    mod.target = caustic.parent
+    mod.offset = 1e-4  # * chain_complexity(chain)
+
+    # fill out caustic_info property
+    caustic.caustic_info.lightsheet = lightsheet
+    for obj, kind, _ in chain:
+        item = caustic.caustic_info.path.add()
+        item.object = obj
+        item.kind = kind
 
     return caustic
 
@@ -295,9 +302,8 @@ def setup_caustic_bmesh(sheet_to_data):
     for sheet_pos, cdata in sheet_to_data.items():
         assert cdata is not None, sheet_pos
 
-        # create caustic vertex, offset so that caustic wraps around object
-        position = cdata.location + 1e-4 * cdata.perp
-        vert = caustic_bm.verts.new(position)
+        # create caustic vertex
+        vert = caustic_bm.verts.new(cdata.location)
 
         # setup vertex data
         vert[face_index] = cdata.face_index
@@ -351,3 +357,19 @@ def fill_caustic_faces(caustic_bm, lightsheet):
             assert len(caustic_verts) == 3, len(caustic_verts)
             caustic_bm.faces.new(caustic_verts)
     ls_bm.free()
+
+
+def chain_complexity(chain):
+    """Calculate a number representing the complexity of the given ray path."""
+    weights = {'TRANSPARENT': 0, 'REFLECT': 1, 'REFRACT': 2}
+
+    # check that only the last link is diffuse
+    assert chain[-1].kind == 'DIFFUSE', chain[-1]
+    assert all(link.kind in weights for link in chain[:-1])
+
+    # complexity = kind of interactions in base 3
+    cplx = 0
+    for link in chain[:-1]:
+        cplx = 3 * cplx + weights[link.kind]
+
+    return cplx

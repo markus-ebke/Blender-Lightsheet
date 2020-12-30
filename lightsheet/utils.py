@@ -20,14 +20,16 @@
 # ##### END GPL LICENSE BLOCK #####
 """Helper functions used by more than one operator.
 
-- bmesh_delete_loose (bmesh reimplementation of bpy.ops.mesh.delete_loose)
+- bmesh_delete_loose (bmesh reimplementation of bpy.ops.mesh.delete_loose, used
+    by trace_lightsheet, refine_caustic and finalize_caustic)
 - verify_collection_for_scene (used by create_lightsheet, trace_lightsheet and
     visualize_raypath)
 - verify_lightsheet_layers (used by create_lightsheet and trace_lightsheet)
-- chain_complexity (used by trace_lightsheet and refine_caustics)
 - setup_sheet_property (used by trace_lightsheet and refine_caustics)
 - set_caustic_squeeze (used by trace_lightsheet and refine_caustics)
 - set_caustic_face_data (used by trace_lightsheet and refine_caustics)
+- ProgressIndicator (used by trace_lightsheet, refine_caustic and
+    finalize_caustic)
 """
 
 import sys
@@ -107,22 +109,6 @@ def verify_lightsheet_layers(bm):
             sx, sy, sz = vert_to_sheet[loop.vert]
             loop[uv_sheet_xy].uv = (sx, sy)
             loop[uv_sheet_xz].uv = (sx, sz)
-
-
-def chain_complexity(chain):
-    """Calculate a number representing the complexity of the given ray path."""
-    weights = {'TRANSPARENT': 0, 'REFLECT': 1, 'REFRACT': 2}
-
-    # check that only the last link is diffuse
-    assert chain[-1].kind == 'DIFFUSE', chain[-1]
-    assert all(link.kind in weights for link in chain[:-1])
-
-    # complexity = kind of interactions in base 3
-    cplx = 0
-    for link in chain[:-1]:
-        cplx = 3 * cplx + weights[link.kind]
-
-    return cplx
 
 
 def setup_sheet_property(bm):
