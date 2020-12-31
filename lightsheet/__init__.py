@@ -67,6 +67,7 @@ from bpy.utils import register_class, unregister_class
 # registration
 classes = (
     ui.LIGHTSHEET_PT_tools,
+    ui.LIGHTSHEET_PT_object,
     ui.LIGHTSHEET_PT_caustic,
     ui.LIGHTSHEET_PT_raypath,
     create_lightsheet.LIGHTSHEET_OT_create_lightsheet,

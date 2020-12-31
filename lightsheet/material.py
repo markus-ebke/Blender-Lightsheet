@@ -239,8 +239,8 @@ def setup_node_principled(node):
         # no reflection and refraction tracing, but maybe diffuse
         if handle_diffuse:
             return diffuse_surface_shader
-        else:
-            return None  # no diffuse => no caustic or caustic tracing at all
+
+        return None  # no diffuse => no caustic or caustic tracing at all
 
     # don't handle refraction if it has roughness
     extra_roughness = node.inputs['Transmission Roughness'].default_value
@@ -297,7 +297,7 @@ def setup_scalar_node(node, from_socket_identifier=None):
     elif node.type == 'LAYER_WEIGHT':  # layer weight node
         blend = node.inputs['Blend'].default_value
 
-        # formulas from cycles/kernel/svm_fresnel.h
+        # formulas from cycles/kernel/svm/svm_fresnel.h
         if from_socket_identifier == 'Fresnel':
             ior = 1 / max(1 - blend, 1e-5)
 
@@ -313,10 +313,9 @@ def setup_scalar_node(node, from_socket_identifier=None):
                 blend_clamped = max(blend, 1 - 1e-5)  # blend < 1
                 return 1 - pow(dot, 0.5 / (1 - blend_clamped))
     else:  # none of the above
-        print(f"Lightsheet: Scalar node {node.type} not supported")
-
-        def fac(incoming, normal):
-            return 0.0
+        alternatives = "'FRESNEL' and 'LAYER_WEIGHT'"
+        msg = f"Node '{node.type}' is not supported, only {alternatives}"
+        raise ValueError(msg)
 
     return fac
 
@@ -335,24 +334,22 @@ def setup_node_mix(node):
             return fac_value
 
     # get the two connected shader nodes and setup shader functions
+    shader1 = None
     if node.inputs[1].links:
         node1 = node.inputs[1].links[0].from_node
         setup = setup_node_interactions.get(node1.type)
         if setup is not None:
             shader1 = setup(node1)
-        else:
-            shader1 = invalid_surface_shader
-    else:
+    if shader1 is None:
         shader1 = invalid_surface_shader
 
+    shader2 = None
     if node.inputs[2].links:
         node2 = node.inputs[2].links[0].from_node
         setup = setup_node_interactions.get(node2.type)
         if setup is not None:
             shader2 = setup(node2)
-        else:
-            shader2 = invalid_surface_shader
-    else:
+    if shader2 is None:
         shader2 = invalid_surface_shader
 
     def surface_shader(ray_direction, normal):
@@ -416,7 +413,7 @@ def get_material_shader(mat):
     func(ray_direction, normal) = list of interactions
     The second return value is a tuple (or None) that summarizes the parameters
     for volume absorption. If not None (i.e. there is absorption) then it is of
-    the form (color: mathutils.Color, density: float).
+    the form (color: 3-tuple, density: float).
     """
     # check if material is valid and uses nodes
     if mat is None or not mat.use_nodes:
@@ -441,7 +438,7 @@ def get_material_shader(mat):
         volume_node = volume_links[0].from_node
         if volume_node.type == 'VOLUME_ABSORPTION':
             volume_params = (
-                Color(volume_node.inputs['Color'].default_value[:3]).freeze(),
+                volume_node.inputs['Color'].default_value[:3],
                 volume_node.inputs['Density'].default_value
             )
 
