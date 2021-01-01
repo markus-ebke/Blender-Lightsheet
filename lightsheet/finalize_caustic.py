@@ -56,7 +56,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 
     fade_boundary: bpy.props.BoolProperty(
         name="Fade Out Boundary",
-        description="Hide boundary by making it transparent",
+        description="Disguise the boundary by fading out",
         default=True
     )
     remove_dim_faces: bpy.props.BoolProperty(
@@ -65,22 +65,22 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         default=True
     )
     emission_cutoff: bpy.props.FloatProperty(
-        name="Emit Strength Cutoff",
+        name="Emission Cutoff",
         description="Remove face if its emission strength (in W/m^2) is lower "
         "than this value (includes the current light strength)",
         default=0.001, min=0.0, precision=4
     )
     delete_empty_caustics: bpy.props.BoolProperty(
         name="Delete Empty Caustics",
-        description="If after cleanup no faces remain, delete the caustic",
+        description="If no faces remain after cleanup, delete the caustic",
         default=True
     )
     fix_overlap: bpy.props.BoolProperty(
         name="Cycles: Fix Overlap Artifacts",
         description="WARNING: SLOW! Prevent render artifacts in Cycles caused "
         "by overlapping faces, will find intersecting faces and stack them on "
-        "top of each other. Use the offset of the shrinkwrap modifiers first "
-        "to separate different caustics from each other!",
+        "top of each other. First use the offset of the shrinkwrap modifiers "
+        "to separate different caustics from each other",
         default=False
     )
 
@@ -88,7 +88,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
     def poll(cls, context):
         # operator makes sense only for caustics
         if context.selected_objects:
-            return all(obj.caustic_info.path
+            return all(obj.caustic_info.path and not obj.caustic_info.finalized
                        for obj in context.selected_objects)
         return False
 
@@ -96,16 +96,13 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         # cancel with error message
         def cancel(obj, reasons):
             msg = f"Cannot finalize '{obj.name}' because {reasons}!"
-            self.report({"ERROR"}, msg)
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
         # check all caustics
         for obj in context.selected_objects:
             assert obj.caustic_info.path, obj  # poll failed us!
-
-            # we won't finalize already finalized caustics
-            if obj.caustic_info.finalized:
-                return cancel(obj, reasons="it is already finalized")
+            assert not obj.caustic_info.finalized, obj
 
             # check that caustic has a lightsheet
             lightsheet = obj.caustic_info.lightsheet
@@ -119,13 +116,34 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 
             # check that light type is supported
             light_type = light.data.type
-            if light_type not in ('SUN', 'SPOT', 'POINT'):
+            if light_type not in {'SUN', 'SPOT', 'POINT'}:
                 reasons = f"{light_type.lower()} lights are not supported"
                 return cancel(obj, reasons)
 
         # set properties via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+
+        layout.prop(self, "fade_boundary")
+
+        # remove dim faces and emission cutoff in one row
+        heading = layout.column(align=False, heading="Remove Dim Faces")
+        row = heading.row(align=True)
+        row.prop(self, "remove_dim_faces", text="")
+        sub = row.row()
+        sub.active = self.remove_dim_faces
+        sub.prop(self, "emission_cutoff")
+
+        # if we don't remove dim faces, deleting empty caustics is useless
+        sub = layout.column()
+        sub.active = self.remove_dim_faces
+        sub.prop(self, "delete_empty_caustics")
+
+        layout.prop(self, "fix_overlap")
 
     def execute(self, context):
         caustics = context.selected_objects
@@ -161,9 +179,9 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         f_stats = f"Finalized {finalized}"
         d_stats = f"deleted {deleted} caustics"
         t_stats = f"{toc-tic:.1f}s"
-        self.report({"INFO"}, f"{f_stats} and {d_stats} in {t_stats}")
+        self.report({'INFO'}, f"{f_stats} and {d_stats} in {t_stats}")
 
-        return {"FINISHED"}
+        return {'FINISHED'}
 
 
 # -----------------------------------------------------------------------------
@@ -248,11 +266,11 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
     color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
 
     # light color and strength, see also material.py: add_drivers_from_light
-    assert light.data.type in ('POINT', 'SPOT', 'SUN')
-    if light.data.type in {'POINT', 'SPOT'}:
-        light_strength = light.data.energy / (4 * pi**2)
-    else:
+    if light.data.type == 'SUN':
         light_strength = light.data.energy / pi
+    else:
+        assert light.data.type in {'SPOT', 'POINT'}, light
+        light_strength = light.data.energy / (4 * pi**2)
     light_strength *= light.data.color.v
 
     # gather faces with low emission strength

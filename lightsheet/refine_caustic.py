@@ -38,33 +38,28 @@ from lightsheet import trace, utils
 
 
 class LIGHTSHEET_OT_refine_caustic(Operator):
-    """Refine selected caustics by adaptively subdividing edges"""
+    """Adaptively subdivide edges of selected caustics to increase detail"""
     bl_idname = "lightsheet.refine"
     bl_label = "Refine Caustic"
     bl_options = {'REGISTER', 'UNDO'}
 
     adaptive_subdivision: bpy.props.BoolProperty(
         name="Adaptive Subdivision",
-        description="Subdivide edges based on projection error",
+        description="Subdivide edges based on projection error, edges whose "
+        "endpoints touch different faces of the underlying object will always "
+        "get subdivided",
         default=True
     )
     error_threshold: bpy.props.FloatProperty(
         name="Error Threshold",
-        description="Subdivide edge if distance between projected midpoint and"
-        " midpoint of edge if >= threshold * 1/2 length of edge",
+        description="Subdivide edge if distance(midpoint of edge, projected "
+        "midpoint) >= 1/2 * length of edge * threshold",
         default=0.1, min=0.0, soft_max=1.0, precision=2,
-    )
-    span_faces: bpy.props.BoolProperty(
-        name="Subdivide Edges Spanning Faces",
-        description="Always subdivide edges whose vertices lie on different "
-        "faces of the underlying object (better for wrapping around curved "
-        "objects)",
-        default=True
     )
     grow_boundary: bpy.props.BoolProperty(
         name="Grow Boundary",
-        description="Always subdivide edges on the boundary, then add a strip "
-        "of triangles on the outside",
+        description="Always subdivide edges at the boundary and then add a "
+        "strip of triangles around the outside",
         default=True
     )
 
@@ -72,7 +67,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     def poll(cls, context):
         # operator makes sense only for caustics
         if context.selected_objects:
-            return all(obj.caustic_info.path
+            return all(obj.caustic_info.path and not obj.caustic_info.finalized
                        for obj in context.selected_objects)
         return False
 
@@ -80,16 +75,13 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         # cancel with error message
         def cancel(obj, reasons):
             msg = f"Cannot refine '{obj.name}' because {reasons}!"
-            self.report({"ERROR"}, msg)
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
         # check all caustics
         for obj in context.selected_objects:
             assert obj.caustic_info.path, obj  # poll failed us!
-
-            # we won't refine finalized caustics, so don't even allow them
-            if obj.caustic_info.finalized:
-                return cancel(obj, reasons="it is already finalized")
+            assert not obj.caustic_info.finalized, obj
 
             # check that caustic has a lightsheet
             lightsheet = obj.caustic_info.lightsheet
@@ -103,13 +95,27 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 
             # check that light type is supported
             light_type = light.data.type
-            if light_type not in ('SUN', 'SPOT', 'POINT'):
+            if light_type not in {'SUN', 'SPOT', 'POINT'}:
                 reasons = f"{light_type.lower()} lights are not supported"
                 return cancel(obj, reasons)
 
         # set properties via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+
+        # adaptive subdivision and error threshold in one row
+        heading = layout.column(align=False, heading="Adaptive Subdivision")
+        row = heading.row(align=True)
+        row.prop(self, "adaptive_subdivision", text="")
+        sub = row.row()
+        sub.active = self.adaptive_subdivision
+        sub.prop(self, "error_threshold")
+
+        layout.prop(self, "grow_boundary")
 
     def execute(self, context):
         # set relative tolerance
@@ -133,7 +139,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
                 num_verts_before += len(caustic.data.vertices)
                 prog.start_job(caustic.name)
                 refine_caustic(caustic, depsgraph, relative_tolerance,
-                               self.span_faces, self.grow_boundary, prog)
+                               self.grow_boundary, prog)
                 prog.stop_job()
                 num_verts_now += len(caustic.data.vertices)
             prog.end()
@@ -144,16 +150,16 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
         v_stats = f"Added {num_verts_now-num_verts_before:,} verts"
         o_stats = f"{len(caustics)} caustics"
         t_stats = f"{toc-tic:.1f}s"
-        self.report({"INFO"}, f"{v_stats} to {o_stats} in {t_stats}")
+        self.report({'INFO'}, f"{v_stats} to {o_stats} in {t_stats}")
 
-        return {"FINISHED"}
+        return {'FINISHED'}
 
 
 # -----------------------------------------------------------------------------
 # Functions used by refine caustics operator
 # -----------------------------------------------------------------------------
-def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
-                   grow_boundary, prog):
+def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
+                   prog):
     """Do one adaptive subdivision of caustic bmesh."""
     prog.start_task("load mesh")
 
@@ -187,7 +193,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
 
     # collect edges that need adaptive splitting
     prog.start_task("collecting edges", total_steps=len(caustic_bm.edges)+2)
-    caustic_bm.edges.ensure_lookup_table()
+    caustic_bm.edges.ensure_lookup_table()  # for update progress
     deleted_edges = set()
     for edge in caustic_bm.edges:
         # skip non-marked edges
@@ -198,12 +204,10 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
         vert1, vert2 = edge.verts
         sheet_mid = (get_sheet(vert1) + get_sheet(vert2)) / 2
 
-        if span_faces:
-            # split edge if it spans different faces
-            if vert1[face_index] != vert2[face_index]:
-                refine_edges[edge] = sheet_mid
-
-        if relative_tolerance is not None:
+        # always split edges that span different faces
+        if vert1[face_index] != vert2[face_index]:
+            refine_edges[edge] = sheet_mid
+        elif relative_tolerance is not None:
             # split edge if projection is not straight enough
             ray = first_ray(sheet_mid)
             cdata, _ = trace.trace_along_chain(ray, depsgraph, chain)
@@ -354,7 +358,6 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, span_faces,
         step.error_threshold = relative_tolerance
     else:
         step.error_threshold = 0.0
-    step.span_faces = span_faces
     step.grow_boundary = grow_boundary
 
     return caustic

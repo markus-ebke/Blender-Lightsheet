@@ -21,8 +21,17 @@
 """User interface for lightsheet addon.
 
 LIGHTSHEET_PT_tools: Panel in sidebar to access the operators.
-LIGHTSHEET_PT_caustic: Summary of caustic information.
-The tool panel shows some information about the active object.
+LIGHTSHEET_PT_object: Information about the active object.
+LIGHTSHEET_PT_caustic: Summary of caustic raypath and settings.
+LIGHTSHEET_PT_raypath: Summary of caustic raypath for raypath visualization.
+
+Helper functions:
+- display_object_info
+- display_mesh_info
+- display_materials_info
+- display_caustic_raypath
+- display_caustic_refinement
+- display_caustic_finalization
 """
 
 import textwrap
@@ -80,7 +89,7 @@ class LIGHTSHEET_PT_object(Panel):
             ls_coll_name = f"Lightsheets in {context.scene.name}"
             ls_coll = context.scene.collection.children.get(ls_coll_name)
             box = layout.box().column(align=True)
-            display_obj_info(obj, ls_coll, box)
+            display_object_info(obj, ls_coll, box)
 
             if obj.type == 'MESH':
                 # display mesh stats
@@ -140,6 +149,7 @@ class LIGHTSHEET_PT_raypath(Panel):
         obj = context.object
         if obj is not None and obj.parent is not None:
             return bool(obj.parent.caustic_info.path)
+        return False
 
     def draw(self, context):
         layout = self.layout
@@ -161,9 +171,9 @@ class LIGHTSHEET_PT_raypath(Panel):
 
 
 # -----------------------------------------------------------------------------
-# Functions used by create lightsheet operator
+# Functions used by panels
 # -----------------------------------------------------------------------------
-def display_obj_info(obj, lightsheet_collection, layout):
+def display_object_info(obj, lightsheet_collection, layout):
     """Draw info and stats about lightsheet related objects."""
     def is_caustic(obj):
         return bool(obj.caustic_info.path)
@@ -281,9 +291,7 @@ def display_caustic_refinement(caustic_info, layout):
             adaptive = f"{step.error_threshold:.2f}"
         else:
             adaptive = "none"
-        span = "span" if step.span_faces else "    "
-        grow = "grow" if step.grow_boundary else "    "
-        txt = f"Refinement {idx+1}: {adaptive}, {span}, {grow}"
+        txt = f"Step {idx+1}: error={adaptive}, grow={step.grow_boundary}"
         layout.label(text=txt)
 
 

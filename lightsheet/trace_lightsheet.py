@@ -51,7 +51,7 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         name="Max Bounces",
         description="Maximum number of glossy/transmission/transparent "
         "bounces until hitting a diffuse surface",
-        default=4, min=0
+        default=4, min=1
     )
 
     @classmethod
@@ -69,14 +69,14 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         # cancel with error message
         def cancel(obj, reasons):
             msg = f"Cannot trace '{obj.name}' because {reasons}!"
-            self.report({"ERROR"}, msg)
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
         # cancel operator for area lights
         for obj in context.selected_objects:
             assert obj.parent is not None, obj  # poll failed us!
             light_type = obj.parent.data.type
-            if light_type not in ('SUN', 'SPOT', 'POINT'):
+            if light_type not in {'SUN', 'SPOT', 'POINT'}:
                 reasons = f"{light_type.lower()} lights are not supported"
                 return cancel(obj, reasons)
 
@@ -117,9 +117,9 @@ class LIGHTSHEET_OT_trace_lightsheet(Operator):
         # prog.print_stats()
         c_stats = f"{len(all_caustics)} caustic(s)"
         t_stats = f"{toc-tic:.1f}s"
-        self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
+        self.report({'INFO'}, f"Created {c_stats} in {t_stats}")
 
-        return {"FINISHED"}
+        return {'FINISHED'}
 
 
 # -----------------------------------------------------------------------------
@@ -161,8 +161,9 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, prog):
 
     # trace rays and record results
     prog.start_task("tracing rays", total_steps=len(lightsheet_bm.verts))
-    traced = defaultdict(dict)  # traced = {chain: {sheet_pos: CausticData}}
+    lightsheet_bm.verts.ensure_lookup_table()  # for update progress
     first_ray = trace.setup_lightsheet_first_ray(lightsheet)
+    traced = defaultdict(dict)  # traced = {chain: {sheet_pos: CausticData}}
     for vert in lightsheet_bm.verts:
         sheet_pos = get_sheet(vert)
 
@@ -175,7 +176,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, prog):
         for chain, cdata in result:
             traced[chain][sheet_key] = cdata
 
-        prog.update_progress()
+        prog.update_progress(vert.index)
     lightsheet_bm.free()
 
     # convert to Blender objects

@@ -21,6 +21,11 @@
 """Trace, refine and finalize the selected caustics over several frames.
 
 LIGHTSHEET_OT_animated_trace: Operator for automatic tracing
+
+Helper functions:
+- auto_trace
+- categorize_new_caustics
+- caustics_key
 """
 
 from collections import defaultdict
@@ -36,6 +41,10 @@ class LIGHTSHEET_OT_animated_trace(Operator):
     bl_label = "Animated Trace"
     bl_options = {'REGISTER', 'UNDO'}
 
+    frame_reference: bpy.props.IntProperty(
+        name="Reference Frame",
+        description="Frame in which the selected caustics were traced"
+    )
     frame_start: bpy.props.IntProperty(name="Start Frame")
     frame_end: bpy.props.IntProperty(name="End Frame")
 
@@ -51,7 +60,7 @@ class LIGHTSHEET_OT_animated_trace(Operator):
         # cancel with error message
         def cancel(obj, reasons):
             msg = f"Can't refine '{obj.name}' because {reasons}!"
-            self.report({"ERROR"}, msg)
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
         # check all caustics
@@ -70,42 +79,51 @@ class LIGHTSHEET_OT_animated_trace(Operator):
 
             # check that light type is supported
             light_type = light.data.type
-            if light_type not in ('SUN', 'SPOT', 'POINT'):
+            if light_type not in {'SUN', 'SPOT', 'POINT'}:
                 reasons = f"{light_type.lower()} lights are not supported"
                 return cancel(obj, reasons)
 
         # use same start and end frames as in scene
         scene = context.scene
+        self.frame_reference = scene.frame_current
         self.frame_start = scene.frame_start
         self.frame_end = scene.frame_end
 
         # set properties via dialog window
         wm = context.window_manager
-        return wm.invoke_props_dialog(self)
+        return wm.invoke_props_dialog(self, width=400)
 
     def draw(self, context):
+        layout = self.layout
         caustics = context.selected_objects
 
         # info about selected caustics
-        self.layout.label(text=f"Found {len(caustics)} selected caustics:")
-        box = self.layout.box().column(align=True)
-        for obj in caustics:
-            num_refine = len(obj.caustic_info.refinements)
-            box.label(text=f"{obj.name} ({num_refine} refinements)")
+        layout.label(text=f"Found {len(caustics)} selected caustics:")
+        show_lines = 8
+        if len(caustics) > show_lines:
+            show_lines -= 1  # make room for last line
+        box = layout.box().column(align=True)
+        for obj in caustics[:show_lines]:
+            state = f"{len(obj.caustic_info.refinements)} refinements"
+            if obj.caustic_info.finalized:
+                state += ", finalized"
+            box.label(text=f"{obj.name} ({state})")
+        if len(caustics) > show_lines:
+            box.label(text=f"...{len(caustics)-show_lines} more objects...")
 
         # start and end frame properties
-        row = self.layout.row(align=True)
-        row.scale_x = 0.8
-        row.prop(self, "frame_start", text="Start")
-        row.prop(self, "frame_end", text="End")
+        row = layout.row(align=True)
+        row.prop(self, "frame_reference")
+        row.prop(self, "frame_start")
+        row.prop(self, "frame_end")
 
         # show time and memory warning
         msg = "This will take a long time and use a lot of memory"
-        self.layout.label(text=msg, icon='ERROR')
+        layout.label(text=msg, icon='ERROR')
 
         # show how to cancel compuations
         msg = "To cancel press Ctrl-C in the console window"
-        self.layout.label(text=msg, icon='INFO')
+        layout.label(text=msg, icon='INFO')
 
     def execute(self, context):
         wm = context.window_manager
@@ -118,14 +136,20 @@ class LIGHTSHEET_OT_animated_trace(Operator):
         for frame in range(self.frame_start, self.frame_end + 1):
             # update window manager progress counter
             wm.progress_update(frame)
-            print(f"Lightsheet: Animating trace for frame {frame}")
+            # print(f"Lightsheet: Animating trace for frame {frame}")
 
             context.scene.frame_set(frame)
-            if frame == frame_current:
+            if frame == self.frame_reference:
                 # caustics for this frame are the reference caustics
-                for obj in reference_caustics:
-                    obj.name = f"{obj.name} f{frame_current:0>3}"
                 new_caustics = reference_caustics
+
+                # add frame number to the name of the reference caustic
+                for obj in reference_caustics:
+                    ref_name = obj.name
+                    if ref_name[-3:].isnumeric() and ref_name[-5:-3] == " f":
+                        ref_name = ref_name[:-5]
+                    obj.name = f"{ref_name} f{frame:0>3}"
+                    obj.data.name = obj.name
             else:
                 # trace caustics for this frame
                 new_caustics = auto_trace(context, reference_caustics, frame)
@@ -134,7 +158,7 @@ class LIGHTSHEET_OT_animated_trace(Operator):
             if new_caustics is None:
                 return {'CANCELLED'}
 
-            print(f"Frame {frame}: {len(new_caustics)} caustics")
+            print(f"Lightsheet: {len(new_caustics)} caustics in frame {frame}")
             # unhide the caustic only for this one frame
             for obj in new_caustics:
                 # show in this frame
@@ -161,20 +185,13 @@ class LIGHTSHEET_OT_animated_trace(Operator):
         c_stats = f"{len(reference_caustics)} caustics(s)"
         f_stats = f"{self.frame_end-self.frame_start+1} frames"
         t_stats = f"{(toc-tic)/60:.1f}min"
-        self.report({"INFO"}, f"Animated {c_stats} for {f_stats} in {t_stats}")
+        self.report({'INFO'}, f"Animated {c_stats} for {f_stats} in {t_stats}")
 
-        return {"FINISHED"}
+        return {'FINISHED'}
 
 
 def auto_trace(context, reference_caustics, frame):
     """Trace, refine and finalize caustics for the given lightsheets."""
-    # match reference to new caustics by their path
-    def caustic_key(caustic_info):
-        path_key = [(caustic_info.lightsheet, "SOURCE")]
-        for link in caustic_info.path:
-            path_key.append((link.object, link.kind))
-        return tuple(path_key)
-
     # map lightsheets to reference caustics
     lightsheet_to_paths = defaultdict(list)
     path_to_reference = dict()
@@ -183,7 +200,7 @@ def auto_trace(context, reference_caustics, frame):
         lightsheet_to_paths[obj.caustic_info.lightsheet].append(path_key)
         path_to_reference[path_key] = obj
 
-    # remember all old caustics
+    # remember old caustics
     scene = context.scene
     caustic_coll = scene.collection.children.get(f"Caustics in {scene.name}")
     assert caustic_coll is not None  # how else can we have reference caustics?
@@ -200,11 +217,59 @@ def auto_trace(context, reference_caustics, frame):
         if 'CANCELLED' in ret:
             return None
 
-    # collect and categorize new caustics
+    # collect new caustics, categorize by refinement and finalization settings
     new_caustics = [obj for obj in caustic_coll.objects
                     if obj not in old_caustics]
     # print(f"Found {len(new_caustics)} new caustics")
-    caustic_and_reference = []
+    result = categorize_new_caustics(new_caustics, path_to_reference, frame)
+    refinement_to_caustics, finalization_to_caustics, delete_caustics = result
+
+    # delete unused caustics
+    # print(f"Deleting {len(delete_caustics)} of {len(new_caustics)} caustics")
+    for obj in delete_caustics:
+        bpy.data.objects.remove(obj)
+
+    # refine new caustics
+    for settings_tuple, caustics in refinement_to_caustics.items():
+        for step in settings_tuple:
+            settings = {
+                "adaptive_subdivision": step[0],
+                "error_threshold": step[1],
+                "grow_boundary": step[2]
+            }
+
+            override = context.copy()
+            override["selected_objects"] = caustics
+            ret = bpy.ops.lightsheet.refine(override, **settings)
+            if 'CANCELLED' in ret:
+                return None
+
+    # finalize new caustics
+    for settings_tuple, caustics in finalization_to_caustics.items():
+        settings = {
+            "fade_boundary": settings_tuple[0],
+            "remove_dim_faces": settings_tuple[1],
+            "emission_cutoff": settings_tuple[2],
+            "delete_empty_caustics": True,
+            "fix_overlap": settings_tuple[3]
+        }
+
+        override = context.copy()
+        override["selected_objects"] = caustics
+        ret = bpy.ops.lightsheet.finalize(override, **settings)
+        if 'CANCELLED' in ret:
+            return None
+
+    # return remaining new caustics
+    return [obj for obj in caustic_coll.objects if obj not in old_caustics]
+
+
+def categorize_new_caustics(new_caustics, path_to_reference, frame):
+    """Categorize new caustics by settings of their reference caustics."""
+    refinement_to_caustics = defaultdict(list)
+    finalization_to_caustics = defaultdict(list)
+    delete_caustics = []
+
     for obj in new_caustics:
         path_key = caustic_key(obj.caustic_info)
 
@@ -212,13 +277,13 @@ def auto_trace(context, reference_caustics, frame):
         if path_key in path_to_reference:
             ref_obj = path_to_reference[path_key]
             assert obj.parent == ref_obj.parent, (obj.parent, ref_obj.parent)
-            caustic_and_reference.append((obj, ref_obj))
 
             # add frame number to the name of the new caustic
             ref_name = ref_obj.name
             if ref_name[-3:].isnumeric() and ref_name[-5:-3] == " f":
                 ref_name = ref_name[:-5]
             obj.name = f"{ref_name} f{frame:0>3}"
+            obj.data.name = obj.name
 
             # copy offset of shrinkwrap modifier from reference
             mod = obj.modifiers.get("Shrinkwrap")
@@ -230,42 +295,36 @@ def auto_trace(context, reference_caustics, frame):
                 assert mod.target == obj.parent, mod.target
 
                 mod.offset = ref_mod.offset
+
+            # get refinement settings from reference
+            settings_list = []
+            for step in ref_obj.caustic_info.refinements:
+                step_settings = (
+                    step.adaptive_subdivision,
+                    step.error_threshold,
+                    step.grow_boundary
+                )
+                settings_list.append(step_settings)
+            refinement_to_caustics[tuple(settings_list)].append(obj)
+
+            # get finalization settings from reference
+            settings_tuple = (
+                ref_obj.caustic_info.fade_boundary,
+                ref_obj.caustic_info.remove_dim_faces,
+                ref_obj.caustic_info.emission_cutoff,
+                ref_obj.caustic_info.fix_overlap
+            )
+            finalization_to_caustics[settings_tuple].append(obj)
         else:
-            bpy.data.objects.remove(obj)
+            # we don't need caustics that have no reference
+            delete_caustics.append(obj)
 
-    # refine all new caustics
-    for obj, ref_obj in caustic_and_reference:
-        # print(f"Refining {obj.name} (ref: {ref_obj.name})")
-        for step in ref_obj.caustic_info.refinements:
-            settings = {
-                "adaptive_subdivision": step.adaptive_subdivision,
-                "error_threshold": step.error_threshold,
-                "span_faces": step.span_faces,
-                "grow_boundary": step.grow_boundary
-            }
+    return refinement_to_caustics, finalization_to_caustics, delete_caustics
 
-            override = context.copy()
-            override["selected_objects"] = [obj]
-            ret = bpy.ops.lightsheet.refine(override, **settings)
-            if 'CANCELLED' in ret:
-                return None
 
-    # finalize all new caustics
-    for obj, ref_obj in caustic_and_reference:
-        # print(f"Finalizing {obj.name} (ref: {ref_obj.name})")
-        caustic_info = ref_obj.caustic_info
-        settings = {
-            "fade_boundary": caustic_info.fade_boundary,
-            "remove_dim_faces": caustic_info.remove_dim_faces,
-            "emission_cutoff": caustic_info.emission_cutoff,
-            "delete_empty_caustics": False,  # for predictable caustic number
-            "fix_overlap": caustic_info.fix_overlap
-        }
-
-        override = context.copy()
-        override["selected_objects"] = [obj]
-        ret = bpy.ops.lightsheet.finalize(override, **settings)
-        if 'CANCELLED' in ret:
-            return None
-
-    return [obj for obj, ref_obj in caustic_and_reference]
+def caustic_key(caustic_info):
+    """Identify caustics by their raypath."""
+    path_key = [(caustic_info.lightsheet, "SOURCE")]
+    for link in caustic_info.path:
+        path_key.append((link.object, link.kind))
+    return tuple(path_key)

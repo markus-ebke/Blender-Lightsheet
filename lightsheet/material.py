@@ -681,13 +681,13 @@ def add_drivers_from_light(color, strength, light):
 
     # caustic emission shader strength = light strength (in W/m^2) / pi
     # light strength = light energy / area over which light is emitted
-    if light.data.type in {'POINT', 'SPOT'}:
-        # point and spot lights emit their energy over a sphere (area = 4*pi)
-        driver.expression = "energy / (4 * pi * pi)"
-    else:
-        assert light.data.type == 'SUN'
+    if light.data.type == 'SUN':
         # strength of sun light is already in W/m^2
         driver.expression = "energy / pi"
+    else:
+        assert light.data.type in {'SPOT', 'POINT'}, light
+        # point and spot lights emit their energy over a sphere (area = 4*pi)
+        driver.expression = "energy / (4 * pi * pi)"
 
     # Note: I don't know why we need to divide light strength by pi to get the
     # emission shader strength, I found this out by rendering some test scenes:

@@ -53,7 +53,6 @@ class CausticRefinementSetting(bpy.types.PropertyGroup):
     """Settings for one refinement via the lightsheet.refine operator."""
     adaptive_subdivision: bpy.props.BoolProperty(name="Adaptive Subdivision")
     error_threshold: bpy.props.FloatProperty(name="Error Threshold")
-    span_faces: bpy.props.BoolProperty(name="Subdivide Edges Spanning Faces")
     grow_boundary: bpy.props.BoolProperty(name="Grow Boundary")
 
 
@@ -63,11 +62,13 @@ class CausticInfo(bpy.types.PropertyGroup):
     lightsheet: PointerProperty(
         type=bpy.types.Object,
         name="Lightsheet",
-        description="Lightsheet object that send out this caustic")
+        description="Lightsheet object that send out this caustic"
+    )
     path: CollectionProperty(
         type=CausticPathLink,
         name="Lightsheet Path",
-        description="Path of the lightrays to this caustic")
+        description="Path of the lightrays to this caustic"
+    )
     # refinement settings, extended by lightsheet.refine operator
     refinements: CollectionProperty(
         type=CausticRefinementSetting,
@@ -77,9 +78,14 @@ class CausticInfo(bpy.types.PropertyGroup):
     # finalization, set by lightsheet.finalize operator
     finalized: BoolProperty(
         name="Finalized", description="If caustic has been finalized",
-        default=False)
+        default=False
+    )
     fade_boundary: bpy.props.BoolProperty(name="Fade Out Boundary")
     remove_dim_faces: bpy.props.BoolProperty(name="Remove Dim Faces")
     emission_cutoff: bpy.props.FloatProperty(name="Emit Strength Cutoff")
     fix_overlap: bpy.props.BoolProperty(name="Cycles: Fix Overlap Artifacts")
-    shrinkwrap_offset: bpy.props.FloatProperty(name="Shrinkwrap Offset")
+    shrinkwrap_offset: bpy.props.FloatProperty(
+        name="Shrinkwrap Offset",
+        description="If fix_overlap is used, apply the shrinkwrap modifier but"
+        "save the offset in case it's needed for animation"
+    )

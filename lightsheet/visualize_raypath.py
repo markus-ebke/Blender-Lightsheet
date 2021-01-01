@@ -21,7 +21,12 @@
 """Visualize the caustic raypath that lead to the selected vertices.
 
 LIGHTSHEET_OT_visualize_raypath: Operator to retrace raypath for selected verts
+
+Helper functions:
+- gather_trails
+- convert_trails_to_objects
 """
+
 from time import process_time as stopwatch
 
 import bmesh
@@ -52,7 +57,7 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
         def cancel(obj, reasons):
             verb = "visualize raypath for"
             msg = f"Cannot {verb} '{obj.name}' because {reasons}!"
-            self.report({"ERROR"}, msg)
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
         # check that caustic has a lightsheet
@@ -88,11 +93,15 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
         obj = context.object
 
         # visualize
-        tic = stopwatch()
-        with trace.configure_for_trace(context) as depsgraph:
-            trails = gather_trails(obj, depsgraph)
-            path_obj = convert_trails_to_objects(trails, obj)
-        toc = stopwatch()
+        try:
+            tic = stopwatch()
+            with trace.configure_for_trace(context) as depsgraph:
+                trails = gather_trails(obj, depsgraph)
+                path_obj = convert_trails_to_objects(trails, obj)
+            toc = stopwatch()
+        except RuntimeError as err:
+            self.report({'ERROR'}, str(err))
+            return {'CANCELLED'}
 
         # add path to caustic collection
         coll = utils.verify_collection_for_scene(context.scene, "caustics")
@@ -101,9 +110,9 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
         # report statistics
         v_stats = f"Retraced {len(trails):,} verts"
         t_stats = f"{toc-tic:.1f}s"
-        self.report({"INFO"}, f"{v_stats} in {t_stats}")
+        self.report({'INFO'}, f"{v_stats} in {t_stats}")
 
-        return {"FINISHED"}
+        return {'FINISHED'}
 
 
 # -----------------------------------------------------------------------------
@@ -137,7 +146,7 @@ def gather_trails(caustic, depsgraph):
 
         # if raypath is invalid something is wrong and we should not continue
         if cdata is None:
-            msg = "Existing caustic vertex cannot be projected?!"
+            msg = "Can't project existing caustic vertex (frame incorrect?)"
             raise RuntimeError(msg)
 
         trails.append(trail)

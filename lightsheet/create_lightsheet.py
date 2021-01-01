@@ -64,14 +64,14 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         def cancel(obj, reasons):
             verb = "create lightsheet for"
             msg = f"Cannot {verb} '{obj.name}' because {reasons}!"
-            self.report({"ERROR"}, msg)
+            self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
         # cancel operator for area lights
         for obj in context.selected_objects:
             assert obj.type == 'LIGHT', (obj, obj.type)  # poll failed us!
             light_type = obj.data.type
-            if light_type not in ('SUN', 'SPOT', 'POINT'):
+            if light_type not in {'SUN', 'SPOT', 'POINT'}:
                 reasons = f"{light_type.lower()} lights are not supported"
                 return cancel(obj, reasons)
 
@@ -94,9 +94,9 @@ class LIGHTSHEET_OT_create_lightsheet(Operator):
         # report statistics
         c_stats = f"{len(lightsheets)} lightsheet(s)"
         t_stats = f"{toc - tic:.1f}s"
-        self.report({"INFO"}, f"Created {c_stats} in {t_stats}")
+        self.report({'INFO'}, f"Created {c_stats} in {t_stats}")
 
-        return {"FINISHED"}
+        return {'FINISHED'}
 
 
 # -----------------------------------------------------------------------------
@@ -270,7 +270,7 @@ def convert_bmesh_to_lightsheet(bm, light):
         for vert in bm.verts:
             vert.co.z = 0.0
     else:
-        assert light.data.type in ('POINT', 'SPOT'), light.data.type
+        assert light.data.type in {'SPOT', 'POINT'}, light.data.type
         # lightsheet should be spherical
         for vert in bm.verts:
             vert.co.normalize()
