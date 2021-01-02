@@ -37,10 +37,10 @@ from bpy.types import Operator
 from lightsheet import trace, utils
 
 
-class LIGHTSHEET_OT_refine_caustic(Operator):
-    """Adaptively subdivide edges of selected caustics to increase detail"""
+class LIGHTSHEET_OT_refine_caustics(Operator):
+    """Adaptively subdivide edges of the selected caustics to add detail"""
     bl_idname = "lightsheet.refine"
-    bl_label = "Refine Caustic"
+    bl_label = "Refine Caustics"
     bl_options = {'REGISTER', 'UNDO'}
 
     adaptive_subdivision: bpy.props.BoolProperty(
@@ -120,9 +120,9 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
     def execute(self, context):
         # set relative tolerance
         if self.adaptive_subdivision:
-            relative_tolerance = self.error_threshold
+            error_threshold = self.error_threshold
         else:
-            relative_tolerance = None
+            error_threshold = None
 
         # gather caustics that should be refined, this must be done before we
         # hide caustics and lightsheets because hiding will deselect objects
@@ -138,7 +138,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
             for caustic in caustics:
                 num_verts_before += len(caustic.data.vertices)
                 prog.start_job(caustic.name)
-                refine_caustic(caustic, depsgraph, relative_tolerance,
+                refine_caustic(caustic, depsgraph, error_threshold,
                                self.grow_boundary, prog)
                 prog.stop_job()
                 num_verts_now += len(caustic.data.vertices)
@@ -158,8 +158,7 @@ class LIGHTSHEET_OT_refine_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by refine caustics operator
 # -----------------------------------------------------------------------------
-def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
-                   prog):
+def refine_caustic(caustic, depsgraph, error_threshold, grow_boundary, prog):
     """Do one adaptive subdivision of caustic bmesh."""
     prog.start_task("load mesh")
 
@@ -207,7 +206,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
         # always split edges that span different faces
         if vert1[face_index] != vert2[face_index]:
             refine_edges[edge] = sheet_mid
-        elif relative_tolerance is not None:
+        elif error_threshold is not None:
             # split edge if projection is not straight enough
             ray = first_ray(sheet_mid)
             cdata, _ = trace.trace_along_chain(ray, depsgraph, chain)
@@ -222,7 +221,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
                 edge_mid = (vert1.co + vert2.co) / 2
                 mid_target = world_to_caustic @ cdata.location
                 rel_err = (edge_mid - mid_target).length / edge.calc_length()
-                if rel_err >= relative_tolerance:
+                if rel_err >= error_threshold:
                     refine_edges[edge] = sheet_mid
 
         prog.update_progress(edge.index)
@@ -234,7 +233,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
             if any(edge in deleted_edges for edge in face.edges):
                 # face will disappear => new boundary edges
                 future_boundary_edges.update(face.edges)
-        prog.update_progress()
+        prog.update_progress(prog.current_step+1)
 
         # include all edges of (present or future) boundary faces
         for edge in caustic_bm.edges:
@@ -245,12 +244,12 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
                     vert1, vert2 = other_edge.verts
                     sheet_mid = (get_sheet(vert1) + get_sheet(vert2)) / 2
                     refine_edges[other_edge] = sheet_mid
-        prog.update_progress()
+        prog.update_progress(prog.current_step+1)
 
     # modify bmesh
     prog.start_task("refining edges", total_steps=6)
     split_verts, split_edges = split_caustic_edges(caustic_bm, refine_edges)
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
     if grow_boundary:
         # find any offending vertices?
         is_growable = True
@@ -269,14 +268,14 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
             raise RuntimeError(f"{msg}; {info}")
     else:
         boundary_verts = []
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # ensure triangles
     triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
     if triang_less:
         print(f"Lightsheet: We had to triangulate {len(triang_less)} faces")
         bmesh.ops.triangulate(caustic_bm, faces=triang_less)
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # verify newly added vertices
     new_verts = split_verts + boundary_verts
@@ -303,14 +302,14 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
             # set vertex coordinates and face index
             vert.co = world_to_caustic @ cdata.location
             vert[face_index] = cdata.face_index
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # remove verts that have no target
     bmesh.ops.delete(caustic_bm, geom=dead_verts, context='VERTS')
     utils.bmesh_delete_loose(caustic_bm)
     new_verts = [vert for vert in new_verts if vert.is_valid]
     assert all(data is not None for data in sheet_to_data.values())
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # gather the vertices whose neighbours have changed (to recalculate
     # squeeze), the edges that we may split next and the faces where we
@@ -324,16 +323,16 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
             for ed in vert.link_edges:
                 dirty_edges.add(ed)
     dirty_faces = {face for vert in new_verts for face in vert.link_faces}
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # recalculate squeeze and set face data for dirty faces
     prog.start_task("painting caustic", total_steps=3)
     utils.set_caustic_squeeze(caustic_bm, matrix_sheet=lightsheet.matrix_world,
                               matrix_caustic=caustic.matrix_world,
                               verts=dirty_verts)
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
     utils.set_caustic_face_data(caustic_bm, sheet_to_data, faces=dirty_faces)
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # mark edges for next refinement step
     for edge in caustic_bm.edges:
@@ -344,7 +343,7 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
         face.select_set(False)
     for vert in new_verts:
         vert.select_set(True)
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # convert bmesh back to object
     caustic_bm.to_mesh(caustic.data)
@@ -353,11 +352,8 @@ def refine_caustic(caustic, depsgraph, relative_tolerance, grow_boundary,
 
     # fill out caustic_info property
     step = caustic.caustic_info.refinements.add()
-    step.adaptive_subdivision = relative_tolerance is not None
-    if relative_tolerance is not None:
-        step.error_threshold = relative_tolerance
-    else:
-        step.error_threshold = 0.0
+    step.adaptive_subdivision = error_threshold is not None
+    step.error_threshold = 0.0 if error_threshold is None else error_threshold
     step.grow_boundary = grow_boundary
 
     return caustic

@@ -48,15 +48,22 @@ from mathutils import Matrix
 from lightsheet import utils
 
 
-class LIGHTSHEET_OT_finalize_caustic(Operator):
-    """Smooth and cleanup selected caustics"""
+class LIGHTSHEET_OT_finalize_caustics(Operator):
+    """Cleanup the selected caustics"""
     bl_idname = "lightsheet.finalize"
-    bl_label = "Finalize Caustic"
+    bl_label = "Finalize Caustics"
     bl_options = {'REGISTER', 'UNDO'}
 
+    delete_coordinates: bpy.props.BoolProperty(
+        name="Delete Lightsheet Coordinates",
+        description="Delete the two lightsheet coordinate UV-layers to save "
+        "memory (they are not used for rendering caustics, but can be used "
+        "for other effects)",
+        default=True
+    )
     fade_boundary: bpy.props.BoolProperty(
         name="Fade Out Boundary",
-        description="Disguise the boundary by fading out",
+        description="Disguise the edges of caustics with a fade out",
         default=True
     )
     remove_dim_faces: bpy.props.BoolProperty(
@@ -128,6 +135,7 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         layout = self.layout
         layout.use_property_split = True
 
+        layout.prop(self, "delete_coordinates")
         layout.prop(self, "fade_boundary")
 
         # remove dim faces and emission cutoff in one row
@@ -162,8 +170,8 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
         finalized, deleted = 0, 0
         for caustic in caustics:
             prog.start_job(caustic.name)
-            result = finalize_caustic(caustic, self.fade_boundary,
-                                      emission_cutoff,
+            result = finalize_caustic(caustic, self.delete_coordinates,
+                                      self.fade_boundary, emission_cutoff,
                                       self.delete_empty_caustics,
                                       self.fix_overlap, prog)
             if result is None:
@@ -187,12 +195,29 @@ class LIGHTSHEET_OT_finalize_caustic(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
-def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
-                     fix_overlap, prog):
+def finalize_caustic(caustic, delete_coordinates, fade_boundary,
+                     emission_cutoff, delete_empty, fix_overlap, prog):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
     caustic_bm.from_mesh(caustic.data)
+
+    # remove internal layers used for refining
+    prog.start_task("deleting coordinates")
+    layer = caustic_bm.verts.layers.int.get("Face Index")
+    if layer is not None:
+        caustic_bm.verts.layers.int.remove(layer)
+
+    for co in ["X", "Y", "Z"]:
+        layer = caustic_bm.verts.layers.float.get(f"Lightsheet {co}")
+        if layer is not None:
+            caustic_bm.verts.layers.float.remove(layer)
+
+    if delete_coordinates:
+        for co in ["XY", "XZ"]:
+            layer = caustic_bm.loops.layers.uv.get(f"Lightsheet {co}")
+            if layer is not None:
+                caustic_bm.loops.layers.uv.remove(layer)
 
     # fade out boundary
     if fade_boundary:
@@ -239,6 +264,7 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
     # fill out caustic_info property
     caustic_info = caustic.caustic_info
     caustic_info.finalized = True
+    caustic_info.delete_coordinates = delete_coordinates
     caustic_info.fade_boundary = fade_boundary
     caustic_info.remove_dim_faces = emission_cutoff is not None
     if emission_cutoff is not None:
@@ -299,7 +325,7 @@ def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
     # find affine planes and the faces they contain
     affine_planes = collect_by_plane(bm, safe_distance=100*separation)
     prog.total_steps = 2 + len(affine_planes)
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
     # assign to each face a level
     level_to_faces = defaultdict(list)
@@ -312,7 +338,7 @@ def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
         for level, indices in enumerate(groups):
             level_to_faces[level].extend(faces[idx] for idx in indices)
 
-        prog.update_progress()
+        prog.update_progress(prog.current_step+1)
 
     # split off and elevate faces
     world_to_local = matrix_world.inverted()
@@ -333,7 +359,7 @@ def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
             displacement = (offset + level * separation) * world_normal
             vert.co = world_to_local @ (location + displacement)
 
-    prog.update_progress()
+    prog.update_progress(prog.current_step+1)
 
 
 def collect_by_plane(bm, safe_distance=1e-4):

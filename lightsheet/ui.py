@@ -300,6 +300,8 @@ def display_caustic_finalization(caustic_info, layout):
     layout.label(text=f"Finalized: {caustic_info.finalized}")
 
     if caustic_info.finalized:
+        layout.label(text=f"Delete lightsheet coords: "
+                          f"{caustic_info.delete_coordinates}")
         layout.label(text=f"Fade out boundary: {caustic_info.fade_boundary}")
         layout.label(text=f"Remove dim faces: {caustic_info.remove_dim_faces}")
         if caustic_info.remove_dim_faces:

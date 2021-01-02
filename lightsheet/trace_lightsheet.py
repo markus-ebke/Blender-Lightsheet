@@ -41,10 +41,10 @@ from bpy.types import Operator
 from lightsheet import material, trace, utils
 
 
-class LIGHTSHEET_OT_trace_lightsheet(Operator):
-    """Trace rays from active lightsheet and create caustics"""
+class LIGHTSHEET_OT_trace_lightsheets(Operator):
+    """Trace rays from the selected lightsheets and create caustics"""
     bl_idname = "lightsheet.trace"
-    bl_label = "Trace Lightsheet"
+    bl_label = "Trace Lightsheets"
     bl_options = {'REGISTER', 'UNDO'}
 
     max_bounces: bpy.props.IntProperty(
@@ -189,7 +189,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, prog):
         caustic = convert_caustic_to_object(lightsheet, chain, sheet_to_data)
         if caustic is not None:
             caustics.append(caustic)
-        prog.update_progress()
+        prog.update_progress(prog.current_step+1)
 
     return caustics
 

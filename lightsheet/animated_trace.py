@@ -118,7 +118,7 @@ class LIGHTSHEET_OT_animated_trace(Operator):
         row.prop(self, "frame_end")
 
         # show time and memory warning
-        msg = "This will take a long time and use a lot of memory"
+        msg = "This will take a long time and may use a lot of memory"
         layout.label(text=msg, icon='ERROR')
 
         # show how to cancel compuations
@@ -247,11 +247,12 @@ def auto_trace(context, reference_caustics, frame):
     # finalize new caustics
     for settings_tuple, caustics in finalization_to_caustics.items():
         settings = {
-            "fade_boundary": settings_tuple[0],
-            "remove_dim_faces": settings_tuple[1],
-            "emission_cutoff": settings_tuple[2],
+            "delete_coordinates": settings_tuple[0],
+            "fade_boundary": settings_tuple[1],
+            "remove_dim_faces": settings_tuple[2],
+            "emission_cutoff": settings_tuple[3],
             "delete_empty_caustics": True,
-            "fix_overlap": settings_tuple[3]
+            "fix_overlap": settings_tuple[4]
         }
 
         override = context.copy()
@@ -309,6 +310,7 @@ def categorize_new_caustics(new_caustics, path_to_reference, frame):
 
             # get finalization settings from reference
             settings_tuple = (
+                ref_obj.caustic_info.delete_coordinates,
                 ref_obj.caustic_info.fade_boundary,
                 ref_obj.caustic_info.remove_dim_faces,
                 ref_obj.caustic_info.emission_cutoff,

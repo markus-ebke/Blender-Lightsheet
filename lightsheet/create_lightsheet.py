@@ -41,10 +41,10 @@ from mathutils.geometry import barycentric_transform
 from lightsheet import utils
 
 
-class LIGHTSHEET_OT_create_lightsheet(Operator):
-    """Create a lightsheet for the active object (must be a light)"""
+class LIGHTSHEET_OT_create_lightsheets(Operator):
+    """Create lightsheets for the selected lights (Sun, Spot or Point lamps)"""
     bl_idname = "lightsheet.create"
-    bl_label = "Create Lightsheet"
+    bl_label = "Create Lightsheets"
     bl_options = {'REGISTER', 'UNDO'}
 
     resolution: bpy.props.IntProperty(

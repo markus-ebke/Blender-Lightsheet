@@ -336,16 +336,13 @@ class ProgressIndicator:
         # deactivate timer
         self.tic_task = None
 
-    def update_progress(self, step=None, force=False):
+    def update_progress(self, step, force=False):
         """Update progress of current task."""
+        self.current_step = step
+
         # what time is it?
         if self.clock() - self.last_update > self.update_delay or force:
             # IT'S UPDATE TIME!!!
-            if step is not None:
-                self.current_step = step
-            else:
-                self.current_step += 1
-
             # update terminal output, note that \r will go back to the start of
             # the line so that we can overwrite the previous output
             # idea taken from https://blender.stackexchange.com/a/30739
