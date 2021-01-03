@@ -258,6 +258,7 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
 
     # add shrinkwrap modifier
     mod = caustic.modifiers.new(name="Shrinkwrap", type='SHRINKWRAP')
+    mod.wrap_method = 'TARGET_PROJECT'
     mod.wrap_mode = 'ABOVE_SURFACE'
     mod.target = caustic.parent
     mod.offset = 1e-4  # * chain_complexity(chain)

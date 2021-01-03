@@ -28,7 +28,7 @@ Helper functions:
 - remove_dim_faces
 - stack_overlapping_in_levels
 - collect_by_plane
-- crawl_faces
+- create_affine_plane
 - group_by_collision_table
 - build_collision_table
 - compute_pointcloud_bounds
@@ -36,7 +36,7 @@ Helper functions:
 - det_2d
 """
 
-from collections import defaultdict, deque
+from collections import defaultdict
 from math import pi
 from time import process_time as stopwatch
 
@@ -204,20 +204,7 @@ def finalize_caustic(caustic, delete_coordinates, fade_boundary,
 
     # remove internal layers used for refining
     prog.start_task("deleting coordinates")
-    layer = caustic_bm.verts.layers.int.get("Face Index")
-    if layer is not None:
-        caustic_bm.verts.layers.int.remove(layer)
-
-    for co in ["X", "Y", "Z"]:
-        layer = caustic_bm.verts.layers.float.get(f"Lightsheet {co}")
-        if layer is not None:
-            caustic_bm.verts.layers.float.remove(layer)
-
-    if delete_coordinates:
-        for co in ["XY", "XZ"]:
-            layer = caustic_bm.loops.layers.uv.get(f"Lightsheet {co}")
-            if layer is not None:
-                caustic_bm.loops.layers.uv.remove(layer)
+    remove_layers(caustic_bm, delete_coordinates)
 
     # fade out boundary
     if fade_boundary:
@@ -275,6 +262,24 @@ def finalize_caustic(caustic, delete_coordinates, fade_boundary,
     return caustic
 
 
+def remove_layers(caustic_bm, delete_coordinates):
+    """Delete internal caustic vertex layers and uv-layers if wanted."""
+    layer = caustic_bm.verts.layers.int.get("Face Index")
+    if layer is not None:
+        caustic_bm.verts.layers.int.remove(layer)
+
+    for co in ["X", "Y", "Z"]:
+        layer = caustic_bm.verts.layers.float.get(f"Lightsheet {co}")
+        if layer is not None:
+            caustic_bm.verts.layers.float.remove(layer)
+
+    if delete_coordinates:
+        for co in ["XY", "XZ"]:
+            layer = caustic_bm.loops.layers.uv.get(f"Lightsheet {co}")
+            if layer is not None:
+                caustic_bm.loops.layers.uv.remove(layer)
+
+
 def fadeout_caustic_boundary(caustic_bm):
     """Set vertex color to black for vertices at the boundary."""
     color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
@@ -319,11 +324,13 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
     utils.bmesh_delete_loose(caustic_bm)
 
 
-def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
-                                separation=2e-4):
+def stack_overlapping_in_levels(caustic_bm, matrix_world, offset, prog):
     """Stack intersecting faces such that they don't overlap anymore."""
+    # separation between face levels to prevent Cycles artifacts
+    separation = 1e-5  # found after much trial and error
+
     # find affine planes and the faces they contain
-    affine_planes = collect_by_plane(bm, safe_distance=100*separation)
+    affine_planes = collect_by_plane(caustic_bm, safe_distance=100*separation)
     prog.total_steps = 2 + len(affine_planes)
     prog.update_progress(prog.current_step+1)
 
@@ -343,7 +350,7 @@ def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
     # split off and elevate faces
     world_to_local = matrix_world.inverted()
     for level, faces in level_to_faces.items():
-        geom = bmesh.ops.split(bm, geom=faces)["geom"]
+        geom = bmesh.ops.split(caustic_bm, geom=faces)["geom"]
         verts = (g for g in geom if isinstance(g, bmesh.types.BMVert))
         for vert in verts:
             # get vert normal from face, because normal at boundary might not
@@ -362,16 +369,28 @@ def stack_overlapping_in_levels(bm, matrix_world, offset, prog,
     prog.update_progress(prog.current_step+1)
 
 
+# collection -----------------------------------------------------------------
 def collect_by_plane(bm, safe_distance=1e-4):
     """Group faces of bmesh if they live in the same plane."""
+    # sort faces by obliqueness, because if the height is much smaller
+    # compared to the base then a small error in position of the tip vertex
+    # can have a big effect on the normal of the face and therefore on the
+    # orientation of the affine plane (we don't want to use these oblique
+    # faces to setup the planes)
+    def height_to_base_ratio(face):
+        base_length = max(edge.calc_length() for edge in face.edges)
+        return face.calc_area() / base_length**2  # * 2 unimportant for sort
+    sorted_faces = sorted(bm.faces, key=height_to_base_ratio, reverse=True)
+
     # affine plane = (projection matrix, list of faces, list of 2D-shapes),
     # the projection matrix projects points in global space to (u, v, w) where
     # (u, v) are local coordinates in the plane and z is the distance to the
     # plane, each shape is a list of three 2D-vectors which are the (u, v)
-    # coordinates of face.verts
-    face_to_plane = dict()  # cache plane index for processed faces
+    # coordinates of face.verts projected onto the plane
     affine_planes = []
-    for face in crawl_faces(bm.faces):
+
+    # process faces
+    for face in sorted_faces:
         # get face vertices in CCW-direction from loop cycle
         face_verts = []
         loop = face.loops[0]
@@ -380,25 +399,9 @@ def collect_by_plane(bm, safe_distance=1e-4):
             loop = loop.link_loop_next
         assert len(face_verts) == 3, face_verts
 
-        # check only planes of the immediate neighbours, we may miss a valid
-        # plane but this is a lot faster if we have many planes (like when the
-        # caustic wraps around a curved object)
-        check_planes_indices = set()
-        for vert in face.verts:
-            for other_face in vert.link_faces:
-                if other_face in face_to_plane:
-                    guess_plane_idx = face_to_plane[other_face]
-                    if guess_plane_idx not in check_planes_indices:
-                        check_planes_indices.add(guess_plane_idx)
-
-        # if we could not guess any planes, check all of them
-        if not check_planes_indices:
-            check_planes_indices = range(len(affine_planes))
-
-        # check if face is part of plane and if not then create one for it
-        for plane_idx in check_planes_indices:
-            projector, faces, shapes = affine_planes[plane_idx]
-
+        # check if face can be added to any existing affine plane and if not
+        # then create one for it
+        for projector, faces, shapes in affine_planes:
             # project face onto plane
             shape = []
             for vert in face_verts:
@@ -413,69 +416,51 @@ def collect_by_plane(bm, safe_distance=1e-4):
                 assert len(faces) == len(shapes)
                 faces.append(face)
                 shapes.append(shape)
-                face_to_plane[face] = plane_idx
 
                 # break loop over affine planes, skip else clause below
                 break
         else:
-            # did not find a plane that contains this face, create a new plane
-            v1, v2, v3 = (vert.co for vert in face_verts)
-            s1, s2 = v2 - v1, v3 - v1  # vectors along the sides
-
-            # get orthonormal basis from Gram-Schmidt orthogonalization
-            u1 = s1.normalized()
-            u2 = (s2 - u1.dot(s2) * u1).normalized()  # perpendicular to u1
-            u3 = s1.cross(s2).normalized()  # parallel to face normal
-
-            # want local plane coordinates from global scene coordinates
-            # global coords = Matrix(columns=(u1, u2, u3)) @ local coords + v1
-            mat = Matrix((u1, u2, u3))
-            mat.transpose()  # want u1, u2 and u3 as columns
-            mat = mat.to_4x4()  # to setup affine transformation
-            mat.translation = v1
-            projector = mat.inverted()  # local coords = proj @ global coords
-
-            # project to plane to get 2D-shape
-            shape = [(projector @ co).xy for co in (v1, v2, v3)]
-
-            # check that v1 maps to origin and the other points map to xy-plane
-            # and have correct side lengths
-            p1, p2, p3 = (projector @ co for co in (v1, v2, v3))
-            assert p1.length < 1e-5, (p1, p1.length)
-            assert abs(p2.z) < 1e-5, (p2, p2.z)
-            assert abs(p3.z) < 1e-5, (p3, p3.z)
-            assert abs(p2.length - s1.length) < 1e-5, (p2.length, s1.length)
-            assert abs(p3.length - s2.length) < 1e-5, (p3.length. s2.length)
-
-            # add new affine plane
-            affine_planes.append((projector, [face], [shape]))
-            face_to_plane[face] = len(affine_planes) - 1
+            # create and add new affine plane
+            affine_planes.append(create_affine_plane(face, face_verts))
 
     return affine_planes
 
 
-def crawl_faces(faces):
-    """Generator for iterating over faces in a connected manner."""
-    unvisited_faces = set(faces)
-    while unvisited_faces:
-        root = unvisited_faces.pop()
+def create_affine_plane(face, face_verts):
+    """Create an affine plane for the given face with vertices in CCW order."""
+    # did not find a plane that contains this face, create a new plane
+    v1, v2, v3 = [vert.co for vert in face_verts]
+    s1, s2 = v2 - v1, v3 - v1  # vectors along the sides
 
-        # record connected faces in FIFO queue
-        queue = deque([root])
-        while queue:
-            # get the oldest face that we have not yet iterated over
-            face = queue.popleft()
-            yield face
+    # get orthonormal basis from Gram-Schmidt orthogonalization
+    u1 = s1.normalized()
+    u2 = (s2 - u1.dot(s2) * u1).normalized()  # perpendicular to u1
+    u3 = s1.cross(s2).normalized()  # parallel to face normal
 
-            # find connected faces and put unprocessed ones into queue
-            for vert in face.verts:
-                for other_face in vert.link_faces:
-                    if other_face in unvisited_faces:
-                        # transfer from set of faces to queue
-                        unvisited_faces.remove(other_face)
-                        queue.append(other_face)
+    # want local plane coordinates from global scene coordinates
+    # global coords = Matrix(columns=(u1, u2, u3)) @ local coords + v1
+    mat = Matrix((u1, u2, u3))
+    mat.transpose()  # want u1, u2 and u3 as columns
+    mat = mat.to_4x4()  # to setup affine transformation
+    mat.translation = v1
+    projector = mat.inverted()  # local coords = proj @ global coords
+
+    # project to plane to get 2D-shape
+    shape = [(projector @ co).xy for co in (v1, v2, v3)]
+
+    # check that v1 maps to origin and the other points map to xy-plane
+    # and have correct side lengths
+    p1, p2, p3 = (projector @ co for co in (v1, v2, v3))
+    assert p1.length < 1e-5, (p1, p1.length)
+    assert abs(p2.z) < 1e-5, (p2, p2.z)
+    assert abs(p3.z) < 1e-5, (p3, p3.z)
+    assert abs(p2.length - s1.length) < 1e-5, (p2.length, s1.length)
+    assert abs(p3.length - s2.length) < 1e-5, (p3.length. s2.length)
+
+    return (projector, [face], [shape])
 
 
+# grouping -------------------------------------------------------------------
 def group_by_collision_table(faces, shapes):
     """Sort faces into non-intersecting groups (group is set of indices)."""
     collision_table = build_collision_table(shapes)
@@ -551,11 +536,10 @@ def build_collision_table(shapes):
     # sort triangles left to right, then sweep along x-axis
     number = len(shapes_ccw)
     indices_xaxis = sorted(range(number), key=lambda i: bounds[i][0])
-    for sweep_index in range(number):
+    for sweep_index, idx in enumerate(indices_xaxis):
         # get x-bounds of current triangle
-        idx = indices_xaxis[sweep_index]
         triangle = shapes_ccw[idx]
-        max_x, max_y = bounds[idx][2:]
+        min_y, max_x, max_y = bounds[idx][1:]
 
         # sweep further along x-axis, record triangles in current interval
         overlap_indices = []
@@ -564,13 +548,15 @@ def build_collision_table(shapes):
             if bounds[jdx][0] >= max_x:
                 # arrived at end of x-interval, skip all following triangles
                 break
-            overlap_indices.append(jdx)
+            if bounds[jdx][3] > min_y:
+                # bounds overlap in x-direction
+                overlap_indices.append(jdx)
 
-        # sort found triangles bottom to top, then sweep along y-axis
+        # sort found triangles bottom to top to exit early
         overlap_indices.sort(key=lambda i: bounds[i][1])
         for jdx in overlap_indices:
             if bounds[jdx][1] >= max_y:
-                # arrived at end of y-interval, skip all following triangles
+                # arrived at end of y-interval, skip the rest
                 break
 
             # narrow-phase collision detection
