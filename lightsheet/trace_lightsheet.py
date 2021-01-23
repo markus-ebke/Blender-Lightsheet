@@ -189,7 +189,7 @@ def trace_lightsheet(lightsheet, depsgraph, max_bounces, prog):
         caustic = convert_caustic_to_object(lightsheet, chain, sheet_to_data)
         if caustic is not None:
             caustics.append(caustic)
-        prog.update_progress(prog.current_step+1)
+        prog.update_progress()
 
     return caustics
 

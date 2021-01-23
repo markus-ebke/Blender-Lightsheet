@@ -22,6 +22,8 @@
 
 - bmesh_delete_loose (bmesh reimplementation of bpy.ops.mesh.delete_loose, used
     by trace_lightsheet, refine_caustic and finalize_caustic)
+- srgb_to_linear (used in finalize_caustic and material)
+- linear_to_srgb (used here in set_caustic_face_data)
 - verify_collection_for_scene (used by create_lightsheet, trace_lightsheet and
     visualize_raypath)
 - verify_lightsheet_layers (used by create_lightsheet and trace_lightsheet)
@@ -52,6 +54,18 @@ def bmesh_delete_loose(bm, use_verts=True, use_edges=True):
     if use_verts:
         loose_verts = [vert for vert in bm.verts if not vert.link_edges]
         bmesh.ops.delete(bm, geom=loose_verts, context='VERTS')
+
+
+def srgb_to_linear(col):
+    """Convert color in sRGB to linear RGB."""
+    return [u / 12.82 if u <= 0.04045 else ((u + 0.055) / 1.055)**2.4
+            for u in col]
+
+
+def linear_to_srgb(col):
+    """Convert color in linear RGB to sRGB."""
+    return [12.92 * u if u <= 0.0031308 else 1.055 * u**(1/2.4) - 0.055
+            for u in col]
 
 
 def verify_collection_for_scene(scene, objects="lightsheets"):
@@ -131,7 +145,7 @@ def setup_sheet_property(bm):
 
 def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
                         verts=None):
-    """Calc squeeze (= source area / projected area) for the given verts."""
+    """Calculate squeeze (= source area / projected area) for given verts."""
     # if no matrices given assume identity
     if matrix_sheet is None:
         matrix_sheet = Matrix()
@@ -157,8 +171,7 @@ def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
         # with the vert somewhere in the middle, then the source and target
         # area of this polygon is the sum of the source and target areas of
         # the individual faces
-        source_area_sum = 0.0
-        target_area_sum = 0.0
+        source_area_sum, target_area_sum = 0.0, 0.0
         for face in vert.link_faces:
             if face in face_to_area:
                 # found face in cache
@@ -209,6 +222,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
     for layer in caustic_bm.loops.layers.uv.values():
         if layer.name not in reserved_layers:
             uv_layer = layer
+            break  # found one, skip the rest
 
     # set transplanted uv-coordinates and vertex colors for faces
     for face in faces:
@@ -224,7 +238,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
                 loop[uv_sheet_xz].uv = (sx, sz)
 
                 # set face data
-                loop[color_layer] = cdata.color + (1,)
+                loop[color_layer] = linear_to_srgb(cdata.color) + [1]
                 if uv_layer is not None:
                     assert cdata.uv is not None, uv_layer.name
                     loop[uv_layer].uv = cdata.uv
@@ -336,9 +350,12 @@ class ProgressIndicator:
         # deactivate timer
         self.tic_task = None
 
-    def update_progress(self, step, force=False):
+    def update_progress(self, step=None, force=False):
         """Update progress of current task."""
-        self.current_step = step
+        if step is None:
+            self.current_step += 1
+        else:
+            self.current_step = step
 
         # what time is it?
         if self.clock() - self.last_update > self.update_delay or force:

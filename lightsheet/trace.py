@@ -25,10 +25,9 @@ Setup rays and depsgraph via
 - configure_for_trace (is context manager)
 
 Tracing of rays is done via
-- trace_scene_recursive
-- scene_raycast
+- trace_scene
 - trace_along_chain
-- object_raycast
+- scene_raycast
 
 Helper functions:
 - calc_normal
@@ -95,13 +94,12 @@ meshed_objects = set()
 # -----------------------------------------------------------------------------
 # Prepare for trace
 # -----------------------------------------------------------------------------
-def setup_lightsheet_first_ray(lightsheet):
+def setup_lightsheet_first_ray(lightsheet, color=(1.0, 1.0, 1.0)):
     """Generate a function that returns the ray for a given sheet position."""
     sheet_to_world = lightsheet.matrix_world
     origin = sheet_to_world.to_translation()
 
     # setup first ray of given vertex coordinate depending on light type
-    white = (1.0, 1.0, 1.0)
     if lightsheet.parent.data.type == 'SUN':
         # parallel projection along -z axis (local coordinates)
         # note that origin = matrix @ Vector((0, 0, 0))
@@ -112,7 +110,7 @@ def setup_lightsheet_first_ray(lightsheet):
         # parallel projection in sun direction
         def first_ray(sheet_pos):
             ray_origin = sheet_to_world @ sheet_pos
-            return Ray(ray_origin, minus_z_axis, white, tuple())
+            return Ray(ray_origin, minus_z_axis, color, tuple())
     else:
         origin.freeze()  # will use as default value, should be immutable
 
@@ -120,7 +118,7 @@ def setup_lightsheet_first_ray(lightsheet):
         def first_ray(sheet_pos):
             ray_direction = sheet_to_world @ sheet_pos - origin
             ray_direction.normalize()
-            return Ray(origin, ray_direction, white, tuple())
+            return Ray(origin, ray_direction, color, tuple())
 
     return first_ray
 

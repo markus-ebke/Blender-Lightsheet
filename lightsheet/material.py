@@ -37,6 +37,8 @@ from math import sqrt
 import bpy
 from mathutils import Color
 
+from lightsheet import utils
+
 # -----------------------------------------------------------------------------
 # Global variables
 # -----------------------------------------------------------------------------
@@ -140,7 +142,8 @@ def setup_node_glossy(node):
         return None
 
     # node settings
-    color = Color(node.inputs['Color'].default_value[:3])
+    color_srgb = node.inputs['Color'].default_value[:3]
+    color = Color(utils.srgb_to_linear(color_srgb))
 
     def surface_shader(ray_direction, normal):
         refle = ray_direction.reflect(normal)
@@ -153,7 +156,8 @@ def setup_node_transparent(node):
     assert node.type == 'BSDF_TRANSPARENT', node.type
 
     # node settings
-    color = Color(node.inputs['Color'].default_value[:3])
+    color_srgb = node.inputs['Color'].default_value[:3]
+    color = Color(utils.srgb_to_linear(color_srgb))
 
     def surface_shader(ray_direction, normal):
         return [Interaction('TRANSPARENT', ray_direction, color)]
@@ -170,7 +174,8 @@ def setup_node_refraction(node):
         return None
 
     # node settings
-    color = Color(node.inputs['Color'].default_value[:3])
+    color_srgb = node.inputs['Color'].default_value[:3]
+    color = Color(utils.srgb_to_linear(color_srgb))
     ior = node.inputs['IOR'].default_value
 
     def surface_shader(ray_direction, normal):
@@ -192,7 +197,8 @@ def setup_node_glass(node):
         return None
 
     # node settings
-    color = Color(node.inputs['Color'].default_value[:3])
+    color_srgb = node.inputs['Color'].default_value[:3]
+    color = Color(utils.srgb_to_linear(color_srgb))
     ior = node.inputs['IOR'].default_value
 
     def surface_shader(ray_direction, normal):
@@ -219,7 +225,8 @@ def setup_node_principled(node):
     assert node.type == 'BSDF_PRINCIPLED', node.type
 
     # node settings
-    color = Color(node.inputs['Base Color'].default_value[:3])
+    color_srgb = node.inputs['Base Color'].default_value[:3]
+    color = Color(utils.srgb_to_linear(color_srgb))
     metallic = node.inputs['Metallic'].default_value
     specular = node.inputs['Specular'].default_value
     ior = node.inputs['IOR'].default_value
@@ -437,8 +444,9 @@ def get_material_shader(mat):
     if volume_links:
         volume_node = volume_links[0].from_node
         if volume_node.type == 'VOLUME_ABSORPTION':
+            color_srgb = volume_node.inputs['Color'].default_value[:3]
             volume_params = (
-                volume_node.inputs['Color'].default_value[:3],
+                Color(utils.srgb_to_linear(color_srgb)),
                 volume_node.inputs['Density'].default_value
             )
 

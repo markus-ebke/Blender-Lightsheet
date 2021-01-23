@@ -68,7 +68,7 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
     )
     remove_dim_faces: bpy.props.BoolProperty(
         name="Remove Dim Faces",
-        description="Remove faces that emit less power than the cutoff below",
+        description="Remove faces that emit less power than the given cutoff",
         default=True
     )
     emission_cutoff: bpy.props.FloatProperty(
@@ -139,14 +139,18 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         layout.prop(self, "fade_boundary")
 
         # remove dim faces and emission cutoff in one row
-        heading = layout.column(align=False, heading="Remove Dim Faces")
-        row = heading.row(align=True)
-        row.prop(self, "remove_dim_faces", text="")
+        if bpy.app.version < (2, 90, 0):
+            layout.prop(self, "remove_dim_faces")
+            row = layout
+        else:
+            heading = layout.column(heading="Remove Dim Faces")
+            row = heading.row(align=True)
+            row.prop(self, "remove_dim_faces", text="")
         sub = row.row()
         sub.active = self.remove_dim_faces
         sub.prop(self, "emission_cutoff")
 
-        # if we don't remove dim faces, deleting empty caustics is useless
+        # if we don't remove dim faces, deleting empty caustics is not needed
         sub = layout.column()
         sub.active = self.remove_dim_faces
         sub.prop(self, "delete_empty_caustics")
@@ -310,8 +314,8 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
         visible = False
         for loop in face.loops:
             squeeze = loop[squeeze_layer].uv[1]
-            tint_v = max(loop[color_layer][:3])  # = Color(...).v
-            if light_strength * tint_v * squeeze > emission_cutoff:
+            color = utils.srgb_to_linear(loop[color_layer][:3])
+            if light_strength * squeeze * max(color) > emission_cutoff:
                 # vertex is intense enough, face is visible
                 visible = True
                 break
@@ -332,7 +336,7 @@ def stack_overlapping_in_levels(caustic_bm, matrix_world, offset, prog):
     # find affine planes and the faces they contain
     affine_planes = collect_by_plane(caustic_bm, safe_distance=100*separation)
     prog.total_steps = 2 + len(affine_planes)
-    prog.update_progress(prog.current_step+1)
+    prog.update_progress()
 
     # assign to each face a level
     level_to_faces = defaultdict(list)
@@ -345,7 +349,7 @@ def stack_overlapping_in_levels(caustic_bm, matrix_world, offset, prog):
         for level, indices in enumerate(groups):
             level_to_faces[level].extend(faces[idx] for idx in indices)
 
-        prog.update_progress(prog.current_step+1)
+        prog.update_progress()
 
     # split off and elevate faces
     world_to_local = matrix_world.inverted()
@@ -366,7 +370,7 @@ def stack_overlapping_in_levels(caustic_bm, matrix_world, offset, prog):
             displacement = (offset + level * separation) * world_normal
             vert.co = world_to_local @ (location + displacement)
 
-    prog.update_progress(prog.current_step+1)
+    prog.update_progress()
 
 
 # collection -----------------------------------------------------------------
