@@ -33,6 +33,7 @@ Helper functions:
 - det_2d
 """
 
+from bisect import bisect_left, bisect_right
 from math import pi
 from time import process_time as stopwatch
 
@@ -331,7 +332,7 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
 
 
 # fix overlap: collection ----------------------------------------------------
-def collect_by_plane(bm):
+def collect_by_plane(bm, safe_distance=1e-4):
     """Group faces of bmesh if they live in the same plane."""
     # sort faces by obliqueness, because if the height is very small compared
     # to the base then a small error in position of the tip vertex can have a
@@ -348,26 +349,69 @@ def collect_by_plane(bm):
     # coordinates in the plane and z is the distance to the plane
     affine_planes = []
 
-    # process faces, starting with the most equilateral ones first
+    # record which faces were collected into which planes and try these planes
+    # first for neighboring faces
+    bm.faces.ensure_lookup_table()
+    face_to_plane = dict()  # {face index: plane index}
+
+    # save indices of planes in the order such that the planes are sorted by
+    # their normal coordinates, save normals in sorted order for faster access
+    order = ([], [], [])
+    normals = ([], [], [])
+
+    # generator for finding good plane indices
+    def plane_indices(face):
+        nonlocal face_to_plane, order, normals
+
+        # check planes of the immediate neighbours first (if any)
+        neighbor_indices = set()
+        for vert in face.verts:
+            for other_face in vert.link_faces:
+                if other_face.index in face_to_plane:
+                    plane_index = face_to_plane[other_face.index]
+                    if plane_index not in neighbor_indices:
+                        yield plane_index
+                        neighbor_indices.add(plane_index)
+
+        # get indices for planes with normal similar to face
+        axis_idx = max([0, 1, 2], key=lambda idx: abs(face.normal[idx]))
+        order_axis, normals_axis = order[axis_idx], normals[axis_idx]
+        start = bisect_left(normals_axis, face.normal[axis_idx] - 0.1)
+        stop = bisect_right(normals_axis, face.normal[axis_idx] + 0.1)
+        for idx in range(start, stop):
+            yield order_axis[idx]
+
+    # process faces, starting with the most equilateral ones
     for face in sorted_faces:
         # check if face can be added to any existing affine plane and if not
-        # then create a plane for it
-        for projector, faces in affine_planes:
+        # then create one for it
+        for plane_index in plane_indices(face):
+            projector, faces = affine_planes[plane_index]
             for vert in face.verts:
                 # project vert and check if lies within the plane
                 point = projector @ vert.co
-                if abs(point.z) > 1e-4:
+                if abs(point.z) > safe_distance:
                     # point is too far away from affine plane, break innermost
                     # loop over face.verts (will skip its else clause)
                     break
             else:
-                # found an acceptable plane, add face and then break loop over
-                # affine planes (will skip else clause below)
+                # found an acceptable plane, add face and remember plane
                 faces.append(face)
+                face_to_plane[face.index] = plane_index
+
+                # break loop over affine planes, skip else clause below
                 break
         else:
             # create and add new affine plane
             affine_planes.append(create_affine_plane(face))
+            face_to_plane[face.index] = len(affine_planes) - 1
+
+            # sort plane indices by normal coordinates
+            for axis_idx in [0, 1, 2]:
+                order_axis, normals_axis = order[axis_idx], normals[axis_idx]
+                sort_idx = bisect_right(normals_axis, face.normal[axis_idx])
+                order_axis.insert(sort_idx, len(affine_planes) - 1)
+                normals_axis.insert(sort_idx, face.normal[axis_idx])
 
     # filter out trivial planes that contain only one face
     proper_planes, individual_faces = [], []
