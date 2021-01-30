@@ -24,26 +24,23 @@ LIGHTSHEET_OT_finalize_caustics: Operator for finalizing caustics
 
 Helper functions:
 - finalize_caustic
-- fadeout_caustic_boundary
+- remove_layers
 - remove_dim_faces
-- stack_overlapping_in_levels
 - collect_by_plane
 - create_affine_plane
-- group_by_collision_table
-- build_collision_table
-- compute_pointcloud_bounds
-- intersect_triangle_triangle
+- bmesh_duplicate_faces
+- merge_in_plane
 - det_2d
 """
 
-from collections import defaultdict
 from math import pi
 from time import process_time as stopwatch
 
 import bmesh
 import bpy
 from bpy.types import Operator
-from mathutils import Matrix
+from mathutils import Matrix, Vector
+from mathutils.geometry import barycentric_transform, delaunay_2d_cdt
 
 from lightsheet import utils
 
@@ -54,16 +51,9 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
     bl_label = "Finalize Caustics"
     bl_options = {'REGISTER', 'UNDO'}
 
-    delete_coordinates: bpy.props.BoolProperty(
-        name="Delete Lightsheet Coordinates",
-        description="Delete the two lightsheet coordinate UV-layers to save "
-        "memory (they are not used for rendering caustics, but can be used "
-        "for other effects)",
-        default=True
-    )
     fade_boundary: bpy.props.BoolProperty(
         name="Fade Out Boundary",
-        description="Disguise the edges of caustics with a fade out",
+        description="Disguise the caustic boundary with a fade out",
         default=True
     )
     remove_dim_faces: bpy.props.BoolProperty(
@@ -84,11 +74,19 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
     )
     fix_overlap: bpy.props.BoolProperty(
         name="Cycles: Fix Overlap Artifacts",
-        description="WARNING: SLOW! Prevent render artifacts in Cycles caused "
-        "by overlapping faces, will find intersecting faces and stack them on "
-        "top of each other. First use the offset of the shrinkwrap modifiers "
-        "to separate different caustics from each other",
+        description="WARNING: SLOW AND CREATES A LOT OF GEOMETRY! Fix render "
+        "artifacts in Cycles caused by overlapping faces, will merge faces "
+        "into a single non-overlapping layer. NOTE: use the offset of the "
+        "shrinkwrap modifier to separate different caustics from each other",
         default=False
+    )
+    delete_coordinates: bpy.props.BoolProperty(
+        name="Delete Lightsheet Coordinates",
+        description="Delete the two UV-layers that hold lightsheet "
+        "coordinates, will save memory but could be used for other effects. "
+        "If overlapping faces are fixed, then these coordinates will always "
+        "be removed",
+        default=True
     )
 
     @classmethod
@@ -135,7 +133,6 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         layout = self.layout
         layout.use_property_split = True
 
-        layout.prop(self, "delete_coordinates")
         layout.prop(self, "fade_boundary")
 
         # remove dim faces and emission cutoff in one row
@@ -157,6 +154,11 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
 
         layout.prop(self, "fix_overlap")
 
+        # always remove coordinates if fix_overlap is enabled
+        sub = layout.column()
+        sub.active = not self.fix_overlap
+        sub.prop(self, "delete_coordinates")
+
     def execute(self, context):
         caustics = context.selected_objects
 
@@ -174,10 +176,10 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         finalized, deleted = 0, 0
         for caustic in caustics:
             prog.start_job(caustic.name)
-            result = finalize_caustic(caustic, self.delete_coordinates,
-                                      self.fade_boundary, emission_cutoff,
-                                      self.delete_empty_caustics,
-                                      self.fix_overlap, prog)
+            result = finalize_caustic(
+                caustic, self.fade_boundary, emission_cutoff,
+                self.delete_empty_caustics, self.fix_overlap,
+                self.delete_coordinates, prog)
             if result is None:
                 deleted += 1
             else:
@@ -199,8 +201,8 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
 # -----------------------------------------------------------------------------
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
-def finalize_caustic(caustic, delete_coordinates, fade_boundary,
-                     emission_cutoff, delete_empty, fix_overlap, prog):
+def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
+                     fix_overlap, delete_coordinates, prog):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
@@ -208,12 +210,16 @@ def finalize_caustic(caustic, delete_coordinates, fade_boundary,
 
     # remove internal layers used for refining
     prog.start_task("deleting coordinates")
-    remove_layers(caustic_bm, delete_coordinates)
+    remove_layers(caustic_bm, delete_coordinates or fix_overlap)
 
     # fade out boundary
     if fade_boundary:
         prog.start_task("fading out boundary")
-        fadeout_caustic_boundary(caustic_bm)
+        color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
+        for vert in caustic_bm.verts:
+            if vert.is_boundary:
+                for loop in vert.link_loops:
+                    loop[color_layer] = (0.0, 0.0, 0.0, 0.0)
 
     # remove dim faces
     if emission_cutoff is not None:
@@ -225,28 +231,30 @@ def finalize_caustic(caustic, delete_coordinates, fade_boundary,
         if delete_empty and len(caustic_bm.faces) == 0:
             bpy.data.objects.remove(caustic)
             return None
-    prog.stop_task()
 
-    # stack overlapping faces in layers
+    # fix overlapping faces
     if fix_overlap:
-        prog.start_task("fixing overlap", total_steps=3)
+        # sort faces into affine planes
+        prog.start_task("finding affine planes")
+        proper_planes, individual_faces = collect_by_plane(caustic_bm)
 
-        # remove shrinkwrap modifier because we need to apply it by hand
-        mod = caustic.modifiers.get("Shrinkwrap")
-        if mod is not None:
-            offset = mod.offset
-            caustic.modifiers.remove(mod)
-        else:
-            # modifier must have been removed by hand
-            assert False, list(caustic.modifiers)
-            offset = 0.0
+        # add individual faces from trivial planes
+        prog.start_task("merging faces", total_steps=len(caustic_bm.faces))
+        new_bm, vert_map = bmesh_duplicate_faces(caustic_bm, individual_faces)
+        prog.update_progress(step=prog.current_step+len(individual_faces))
 
-        # stack
-        stack_overlapping_in_levels(caustic_bm, caustic.matrix_world, offset,
-                                    prog)
-        prog.stop_task()
-    else:
-        offset = 0.0
+        # merge faces in affine planes and add to new bmesh
+        for projector, faces in proper_planes:
+            vert_map = merge_in_plane(caustic_bm, projector, faces, new_bm,
+                                      vert_map)
+            prog.update_progress(step=prog.current_step+len(faces))
+
+        # replace old bmesh by new merged bmesh
+        caustic_bm.free()
+        caustic_bm = new_bm
+
+    # stop any tasks that are still running
+    prog.stop_task()
 
     # convert bmesh back to object
     caustic_bm.to_mesh(caustic.data)
@@ -255,41 +263,35 @@ def finalize_caustic(caustic, delete_coordinates, fade_boundary,
     # fill out caustic_info property
     caustic_info = caustic.caustic_info
     caustic_info.finalized = True
-    caustic_info.delete_coordinates = delete_coordinates
     caustic_info.fade_boundary = fade_boundary
     caustic_info.remove_dim_faces = emission_cutoff is not None
     if emission_cutoff is not None:
         caustic_info.emission_cutoff = emission_cutoff
     caustic_info.fix_overlap = fix_overlap
-    caustic_info.shrinkwrap_offset = offset
+    caustic_info.delete_coordinates = delete_coordinates
 
     return caustic
 
 
 def remove_layers(caustic_bm, delete_coordinates):
     """Delete internal caustic vertex layers and uv-layers if wanted."""
+    # face index vertex layer
     layer = caustic_bm.verts.layers.int.get("Face Index")
     if layer is not None:
         caustic_bm.verts.layers.int.remove(layer)
 
+    # lightsheet coordinate vertex layer
     for co in ["X", "Y", "Z"]:
         layer = caustic_bm.verts.layers.float.get(f"Lightsheet {co}")
         if layer is not None:
             caustic_bm.verts.layers.float.remove(layer)
 
+    # lightsheet coordinate uv-layer
     if delete_coordinates:
         for co in ["XY", "XZ"]:
             layer = caustic_bm.loops.layers.uv.get(f"Lightsheet {co}")
             if layer is not None:
                 caustic_bm.loops.layers.uv.remove(layer)
-
-
-def fadeout_caustic_boundary(caustic_bm):
-    """Set vertex color to black for vertices at the boundary."""
-    color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
-    for vert in (v for v in caustic_bm.verts if v.is_boundary):
-        for loop in vert.link_loops:
-            loop[color_layer] = (0.0, 0.0, 0.0, 0.0)
 
 
 def remove_dim_faces(caustic_bm, light, emission_cutoff):
@@ -314,7 +316,7 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
         visible = False
         for loop in face.loops:
             squeeze = loop[squeeze_layer].uv[1]
-            color = utils.srgb_to_linear(loop[color_layer][:3])
+            color = utils.srgb_to_linear(loop[color_layer].to_3d())
             if light_strength * squeeze * max(color) > emission_cutoff:
                 # vertex is intense enough, face is visible
                 visible = True
@@ -328,112 +330,61 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
     utils.bmesh_delete_loose(caustic_bm)
 
 
-def stack_overlapping_in_levels(caustic_bm, matrix_world, offset, prog):
-    """Stack intersecting faces such that they don't overlap anymore."""
-    # separation between face levels to prevent Cycles artifacts
-    separation = 1e-5  # found after much trial and error
-
-    # find affine planes and the faces they contain
-    affine_planes = collect_by_plane(caustic_bm, safe_distance=100*separation)
-    prog.total_steps = 2 + len(affine_planes)
-    prog.update_progress()
-
-    # assign to each face a level
-    level_to_faces = defaultdict(list)
-    for _, faces, shapes in affine_planes:
-        # group faces into non-intersecting sets, sort groups by area
-        groups = group_by_collision_table(faces, shapes)
-        groups.sort(key=lambda ics: sum(faces[idx].calc_area() for idx in ics),
-                    reverse=True)
-
-        for level, indices in enumerate(groups):
-            level_to_faces[level].extend(faces[idx] for idx in indices)
-
-        prog.update_progress()
-
-    # split off and elevate faces
-    world_to_local = matrix_world.inverted()
-    for level, faces in level_to_faces.items():
-        geom = bmesh.ops.split(caustic_bm, geom=faces)["geom"]
-        verts = (g for g in geom if isinstance(g, bmesh.types.BMVert))
-        for vert in verts:
-            # get vert normal from face, because normal at boundary might not
-            # point in the right direction
-            vert_normal = vert.link_faces[0].normal
-
-            # get vertex normal in world coordinates
-            location = matrix_world @ vert.co
-            world_normal = matrix_world @ (vert.co + vert_normal) - location
-            world_normal.normalize()
-
-            # displace in world coordinates and transform to local coordinates
-            displacement = (offset + level * separation) * world_normal
-            vert.co = world_to_local @ (location + displacement)
-
-    prog.update_progress()
-
-
-# collection -----------------------------------------------------------------
-def collect_by_plane(bm, safe_distance=1e-4):
+# fix overlap: collection ----------------------------------------------------
+def collect_by_plane(bm):
     """Group faces of bmesh if they live in the same plane."""
-    # sort faces by obliqueness, because if the height is much smaller
-    # compared to the base then a small error in position of the tip vertex
-    # can have a big effect on the normal of the face and therefore on the
-    # orientation of the affine plane (we don't want to use these oblique
-    # faces to setup the planes)
+    # sort faces by obliqueness, because if the height is very small compared
+    # to the base then a small error in position of the tip vertex can have a
+    # big effect on the normal of the face and therefore on the orientation of
+    # the affine plane (we don't want to use these oblique faces to setup the
+    # planes)
     def height_to_base_ratio(face):
         base_length = max(edge.calc_length() for edge in face.edges)
         return face.calc_area() / base_length**2  # * 2 unimportant for sort
     sorted_faces = sorted(bm.faces, key=height_to_base_ratio, reverse=True)
 
-    # affine plane = (projection matrix, list of faces, list of 2D-shapes),
-    # the projection matrix projects points in global space to (u, v, w) where
-    # (u, v) are local coordinates in the plane and z is the distance to the
-    # plane, each shape is a list of three 2D-vectors which are the (u, v)
-    # coordinates of face.verts projected onto the plane
+    # affine plane = (projection matrix, list of faces), the projection matrix
+    # maps points in global space to (u, v, w) where (u, v) are local
+    # coordinates in the plane and z is the distance to the plane
     affine_planes = []
 
-    # process faces
+    # process faces, starting with the most equilateral ones first
     for face in sorted_faces:
-        # get face vertices in CCW-direction from loop cycle
-        face_verts = []
-        loop = face.loops[0]
-        for _ in range(len(face.loops)):
-            face_verts.append(loop.vert)
-            loop = loop.link_loop_next
-        assert len(face_verts) == 3, face_verts
-
         # check if face can be added to any existing affine plane and if not
-        # then create one for it
-        for projector, faces, shapes in affine_planes:
-            # project face onto plane
-            shape = []
-            for vert in face_verts:
+        # then create a plane for it
+        for projector, faces in affine_planes:
+            for vert in face.verts:
+                # project vert and check if lies within the plane
                 point = projector @ vert.co
-                if abs(point.z) > safe_distance:
-                    # point is too far away from affine plane, break loop
-                    # over face.verts (will skip else clause)
+                if abs(point.z) > 1e-4:
+                    # point is too far away from affine plane, break innermost
+                    # loop over face.verts (will skip its else clause)
                     break
-                shape.append(point.xy)
             else:
-                # found the right plane to add triangle
-                assert len(faces) == len(shapes)
+                # found an acceptable plane, add face and then break loop over
+                # affine planes (will skip else clause below)
                 faces.append(face)
-                shapes.append(shape)
-
-                # break loop over affine planes, skip else clause below
                 break
         else:
             # create and add new affine plane
-            affine_planes.append(create_affine_plane(face, face_verts))
+            affine_planes.append(create_affine_plane(face))
 
-    return affine_planes
+    # filter out trivial planes that contain only one face
+    proper_planes, individual_faces = [], []
+    for plane in affine_planes:
+        faces = plane[1]
+        if len(faces) > 1:
+            proper_planes.append(plane)
+        else:
+            individual_faces.extend(faces)
+
+    return proper_planes, individual_faces
 
 
-def create_affine_plane(face, face_verts):
+def create_affine_plane(face):
     """Create an affine plane for the given face with vertices in CCW order."""
     # did not find a plane that contains this face, create a new plane
-    v1, v2, v3 = [vert.co for vert in face_verts]
+    v1, v2, v3 = [vert.co for vert in face.verts]
     s1, s2 = v2 - v1, v3 - v1  # vectors along the sides
 
     # get orthonormal basis from Gram-Schmidt orthogonalization
@@ -449,193 +400,189 @@ def create_affine_plane(face, face_verts):
     mat.translation = v1
     projector = mat.inverted()  # local coords = proj @ global coords
 
-    # project to plane to get 2D-shape
-    shape = [(projector @ co).xy for co in (v1, v2, v3)]
-
     # check that v1 maps to origin and the other points map to xy-plane
     # and have correct side lengths
-    p1, p2, p3 = (projector @ co for co in (v1, v2, v3))
+    p1, p2, p3 = [projector @ co for co in (v1, v2, v3)]
     assert p1.length < 1e-5, (p1, p1.length)
     assert abs(p2.z) < 1e-5, (p2, p2.z)
     assert abs(p3.z) < 1e-5, (p3, p3.z)
     assert abs(p2.length - s1.length) < 1e-5, (p2.length, s1.length)
     assert abs(p3.length - s2.length) < 1e-5, (p3.length. s2.length)
 
-    return (projector, [face], [shape])
+    return (projector, [face])
 
 
-# grouping -------------------------------------------------------------------
-def group_by_collision_table(faces, shapes):
-    """Sort faces into non-intersecting groups (group is set of indices)."""
-    collision_table = build_collision_table(shapes)
+# fix overlap: merging -------------------------------------------------------
+# We need the following function because bmesh.ops.duplicate does not work for
+# two bmeshes: NotImplementedError when dest is another bmesh. Aaargh!!! I hope
+# that programmer gets mauled by the rabbit of Caerbannog!
+def bmesh_duplicate_faces(source_bm, faces):
+    """Create new bmesh and copy faces (with caustic data) from old bmesh."""
+    # get caustic layers of source bmesh
+    squeeze_layer = source_bm.loops.layers.uv["Caustic Squeeze"]
+    color_layer = source_bm.loops.layers.color["Caustic Tint"]
+    uv_layer = utils.get_uv_map(source_bm)
 
-    groups = []
-    indices_to_process = set(range(len(faces)))
-    while indices_to_process:
-        if not groups:
-            # on the first iteration try to start with a collision-free face
-            for idx in indices_to_process:
-                if idx not in collision_table:
-                    # found one!
-                    indices_to_process.remove(idx)
-                    group_indices = {idx}
-                    break
-            else:
-                # could not find one, start with a random unprocessed face
-                group_indices = {indices_to_process.pop()}
+    # create fresh bmesh and setup caustic data layers
+    new_bm = bmesh.new()
+    new_squeeze_layer = new_bm.loops.layers.uv.new("Caustic Squeeze")
+    new_color_layer = new_bm.loops.layers.color.new("Caustic Tint")
+
+    # create new verts
+    verts = {vert for face in faces for vert in face.verts}
+    vert_map = dict()
+    for vert in verts:
+        vert_map[vert] = new_bm.verts.new(vert.co)
+
+    # create new faces
+    face_map = dict()
+    for face in faces:
+        # get verts corresponding to old face and create new face
+        new_face_verts = [vert_map[vert] for vert in face.verts]
+        new_face = new_bm.faces.new(new_face_verts)
+        face_map[face] = new_face
+
+        # copy face data from old loops to new loops
+        for loop, new_loop in zip(face.loops, new_face.loops):
+            assert new_loop.vert is vert_map[loop.vert]
+            new_loop[new_squeeze_layer].uv = loop[squeeze_layer].uv
+            new_loop[new_color_layer] = loop[color_layer]
+
+    # copy uv-layer data if it exists
+    if uv_layer is not None:
+        new_uv_layer = new_bm.loops.layers.uv.new(uv_layer.name)
+        for face, new_face in zip(faces, new_bm.faces):
+            assert new_face is face_map[face], (new_face, face_map[face])
+            for loop, new_loop in zip(face.loops, new_face.loops):
+                assert new_loop.vert is vert_map[loop.vert]
+                new_loop[new_uv_layer] = loop[uv_layer]
+
+    return new_bm, vert_map
+
+
+def merge_in_plane(bm, projector, faces, new_bm, vert_map):
+    """Merge faces that lie in the projector plane and add to new bmesh."""
+    # get caustic layers
+    squeeze_layer = bm.loops.layers.uv["Caustic Squeeze"]
+    color_layer = bm.loops.layers.color["Caustic Tint"]
+
+    # read out vert coordinates and caustic color for each face
+    srgb_to_linear = utils.srgb_to_linear
+    face_points, face_color = [], []
+    for face in faces:
+        point_list, color_list = [], []
+        for loop in face.loops:
+            point_list.append(loop.vert.co.copy())
+            squeeze = loop[squeeze_layer].uv.y
+            color = srgb_to_linear(loop[color_layer].to_3d())
+            color_list.append(squeeze * Vector(color))
+        face_points.append(point_list)
+        face_color.append(color_list)
+
+    # read out uv-coordinates, if any
+    uv_layer = utils.get_uv_map(bm)
+    if uv_layer is not None:
+        face_uv = []
+        for face in faces:
+            # note that barycentric_transform expects 3d-vectors
+            face_uv.append([loop[uv_layer].uv.to_3d() for loop in face.loops])
+
+    # convert vertices to 2d-points and remember the vert-index relation
+    verts = list({vert for face in faces for vert in face.verts})
+    points = [(projector @ vert.co).xy for vert in verts]
+    vert_to_index = {vert: i for (i, vert) in enumerate(verts)}
+
+    # convert edges to list of two vertex indices
+    edge_indices = list({tuple(vert_to_index[vert] for vert in edge.verts)
+                         for face in faces for edge in face.edges})
+
+    # convert faces to list of three vertex indices in CCW-order
+    face_indices = []
+    for face in faces:
+        i1, i2, i3 = [vert_to_index[vert] for vert in face.verts]
+        if det_2d(points[i1], points[i2], points[i3]) >= 0:
+            face_indices.append((i1, i2, i3))
         else:
-            # start with a random unprocessed face
-            group_indices = {indices_to_process.pop()}
+            face_indices.append((i1, i3, i2))
 
-        # add more faces if they don't intersect with the already selected
-        # faces for this group, start from the faces immediately connected to
-        # selected faces and grow outwards
-        newly_added = group_indices
-        while newly_added:
-            neighbours = set()
-            for idx in newly_added:
-                for vert in faces[idx].verts:
-                    for other_face in vert.link_faces:
-                        if other_face.index in indices_to_process:
-                            neighbours.add(other_face.index)
+    # constrained delaunay triangulation
+    res = delaunay_2d_cdt(points, edge_indices, face_indices, 1, 1e-12)
+    new_points, _, new_faces, orig_verts, _, orig_faces = res
 
-            newly_added = []
-            for idx in neighbours:
-                # if neighbour does not intersect with any face that we have
-                # already selected, then add it to the group
-                if not (idx in collision_table and
-                        group_indices.intersection(collision_table[idx])):
-                    indices_to_process.remove(idx)
-                    group_indices.add(idx)
-                    newly_added.append(idx)
+    # rebuild vertices in new bmesh
+    mat = projector.inverted()
+    cdt_verts = []
+    for point, orig_idx in zip(new_points, orig_verts):
+        # if an appropriate vert has already been created, use that one
+        if orig_idx:
+            vert = verts[orig_idx[0]]
+            if vert in vert_map:
+                cdt_verts.append(vert_map[vert])
+                continue
 
-        # try to add other faces
-        for idx in indices_to_process.copy():
-            if not group_indices.intersection(collision_table[idx]):
-                indices_to_process.remove(idx)
-                group_indices.add(idx)
+        # add new vertex at the correct un-projected position
+        new_vert = new_bm.verts.new(mat @ point.to_3d())
+        cdt_verts.append(new_vert)
 
-        # tested all faces that were available, group is complete
-        groups.append(group_indices)
+        # if there is an original vertex, add new vertex to vert_map
+        if orig_idx:
+            vert = verts[orig_idx[0]]
+            vert_map[vert] = new_vert
 
-    return groups
+    # get new caustic layers
+    new_squeeze_layer = new_bm.loops.layers.uv["Caustic Squeeze"]
+    new_color_layer = new_bm.loops.layers.color["Caustic Tint"]
+    if uv_layer is not None:
+        new_uv_layer = utils.get_uv_map(new_bm)
+        assert new_uv_layer is not None
 
+    # rebuild faces in new bmesh and interpolate their caustic color
+    linear_to_srgb = utils.linear_to_srgb
+    for vert_indices, orig_indices in zip(new_faces, orig_faces):
+        # skip faces that fill holes, because they would be invisible anyway
+        if not orig_indices:
+            continue
 
-def build_collision_table(shapes):
-    """Build collision table for given shapes via axis sweeping."""
-    # make sure that all triangles have counter-clockwise winding
-    shapes_ccw = []
-    for triangle in shapes:
-        v1, v2, v3 = triangle
-        if det_2d(v1, v2, v3) < 0:
-            shapes_ccw.append((v1, v3, v2))
-        shapes_ccw.append(triangle)
+        # create face
+        face_verts = [cdt_verts[i] for i in vert_indices]
+        try:
+            face = new_bm.faces.new(face_verts)
+        except ValueError:
+            # ValueError: faces.new(verts): face already exists
+            # This happens if collect_by_plane messed up: it did not sort the
+            # face with the given verts into the current plane because another
+            # plane was sufficient first (=> safe_distance too large). However
+            # I don't want to set safe_distance to a lower value because we
+            # might get a worse tradeoff between false positives vs. false
+            # negatives. Instead just get the offending face and continue.
+            face = new_bm.faces.get(face_verts)
 
-    # axis-aligned bounding box for each triangle
-    bounds = [compute_pointcloud_bounds(triangle) for triangle in shapes_ccw]
+        # set face data (squeeze and color)
+        for loop in face.loops:
+            point = loop.vert.co
 
-    # collision table: list index -> {indices of colliding triangles}
-    collision_table = defaultdict(set)
+            # add up colors from old faces
+            color = Vector((0, 0, 0))
+            for i in orig_indices:
+                color += barycentric_transform(point, *face_points[i],
+                                               *face_color[i])
 
-    # sort triangles left to right, then sweep along x-axis
-    number = len(shapes_ccw)
-    indices_xaxis = sorted(range(number), key=lambda i: bounds[i][0])
-    for sweep_index, idx in enumerate(indices_xaxis):
-        # get x-bounds of current triangle
-        triangle = shapes_ccw[idx]
-        min_y, max_x, max_y = bounds[idx][1:]
+            # normalize color and use its maximum as squeeze (= intensity)
+            squeeze = max(*color, 1e-15)
+            loop[new_squeeze_layer].uv[1] = squeeze
+            loop[new_color_layer] = linear_to_srgb(color / squeeze) + (1,)
 
-        # sweep further along x-axis, record triangles in current interval
-        overlap_indices = []
-        for sweep_ahead in range(sweep_index+1, number):
-            jdx = indices_xaxis[sweep_ahead]
-            if bounds[jdx][0] >= max_x:
-                # arrived at end of x-interval, skip all following triangles
-                break
-            if bounds[jdx][3] > min_y:
-                # bounds overlap in x-direction
-                overlap_indices.append(jdx)
+        # set face data (uv-coordinates if any)
+        if uv_layer is not None:
+            i = orig_indices[0]  # one index is enough, no average needed
+            for loop in face.loops:
+                uv = barycentric_transform(loop.vert.co, *face_points[i],
+                                           *face_uv[i])
+                loop[new_uv_layer].uv = uv.xy
 
-        # sort found triangles bottom to top to exit early
-        overlap_indices.sort(key=lambda i: bounds[i][1])
-        for jdx in overlap_indices:
-            if bounds[jdx][1] >= max_y:
-                # arrived at end of y-interval, skip the rest
-                break
-
-            # narrow-phase collision detection
-            if intersect_triangle_triangle(triangle, shapes_ccw[jdx]):
-                collision_table[idx].add(jdx)
-                collision_table[jdx].add(idx)
-
-    return collision_table
-
-
-def compute_pointcloud_bounds(points):
-    """Compute corners of axis-aligned bounding box containing the points."""
-    p1 = points[0]
-    lo_x = hi_x = p1.x
-    lo_y = hi_y = p1.y
-
-    for p in points[1:]:
-        if p.x < lo_x:
-            lo_x = p.x
-        elif p.x > hi_x:
-            hi_x = p.x
-
-        if p.y < lo_y:
-            lo_y = p.y
-        elif p.y > hi_y:
-            hi_y = p.y
-
-    return (lo_x, lo_y, hi_x, hi_y)
-
-
-# triangle-triangle intersection ----------------------------------------------
-# adapted from https://rosettacode.org/wiki/Determine_if_two_triangles_overlap
-
-def intersect_triangle_triangle(triangle1, triangle2):
-    """Test if two triangles intersect using the separating axis theorem."""
-    v1, v2, v3 = triangle1
-    w1, w2, w3 = triangle2
-
-    # check if triangles share an edge, then we know due to winding on which
-    # side of the edge the other points lie and if the triangles intersect
-    if v1 == w1:
-        if v2 == w2:
-            return True
-        if v2 == w3:
-            return False
-    elif v1 == w2:
-        if v2 == w3:
-            return True
-        if v2 == w1:
-            return False
-    elif v1 == w3:
-        if v2 == w1:
-            return True
-        if v2 == w2:
-            return False
-
-    # see if one of the edges of triangle1 is a separating line
-    for start, end in [(v1, v2), (v2, v3), (v3, v1)]:
-        # if all vertices of triangle2 lie to the right side of the edge, then
-        # this edge separates triangle1 (on the left) from triangle2 (on the
-        # right)
-        if (det_2d(start, end, w1) <= 0 and det_2d(start, end, w2) <= 0 and
-                det_2d(start, end, w3) <= 0):
-            return False
-
-    # see if one of the edges of triangle2 is a separating line
-    for start, end in [(w1, w2), (w2, w3), (w3, w1)]:
-        if (det_2d(start, end, v1) <= 0 and det_2d(start, end, v2) <= 0 and
-                det_2d(start, end, v3) <= 0):
-            return False
-
-    # if we arrived here, then none of the edges is a separating line and the
-    # two triangles (which are convex) must intersect by the separating axis
-    # theorem
-    return True
+    # return updated vert map, this is not strictly neccessary because dicts
+    # are mutable, but "explicit is better than implicit"
+    return vert_map
 
 
 def det_2d(p1, p2, p3):

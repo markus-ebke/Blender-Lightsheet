@@ -23,11 +23,12 @@
 - bmesh_delete_loose (bmesh reimplementation of bpy.ops.mesh.delete_loose, used
     by trace_lightsheet, refine_caustic and finalize_caustic)
 - srgb_to_linear (used in finalize_caustic and material)
-- linear_to_srgb (used here in set_caustic_face_data)
+- linear_to_srgb (used here in set_caustic_face_data and in finalize_caustic)
 - verify_collection_for_scene (used by create_lightsheet, trace_lightsheet and
     visualize_raypath)
 - verify_lightsheet_layers (used by create_lightsheet and trace_lightsheet)
 - setup_sheet_property (used by trace_lightsheet and refine_caustics)
+- get_uv_map (used here in set_caustic_face_data and in finalize_caustics)
 - set_caustic_squeeze (used by trace_lightsheet and refine_caustics)
 - set_caustic_face_data (used by trace_lightsheet and refine_caustics)
 - ProgressIndicator (used by trace_lightsheet, refine_caustic and
@@ -58,14 +59,26 @@ def bmesh_delete_loose(bm, use_verts=True, use_edges=True):
 
 def srgb_to_linear(col):
     """Convert color in sRGB to linear RGB."""
-    return [u / 12.82 if u <= 0.04045 else ((u + 0.055) / 1.055)**2.4
-            for u in col]
+    # return [u / 12.82 if u <= 0.04045 else ((u + 0.055) / 1.055)**2.4
+    #         for u in col]
+    # list comprehension unrolled for speed:
+    return (
+        col[0]/12.82 if col[0] <= 0.04045 else ((col[0]+0.055)/1.055)**2.4,
+        col[1]/12.82 if col[1] <= 0.04045 else ((col[1]+0.055)/1.055)**2.4,
+        col[2]/12.82 if col[2] <= 0.04045 else ((col[2]+0.055)/1.055)**2.4,
+    )
 
 
 def linear_to_srgb(col):
     """Convert color in linear RGB to sRGB."""
-    return [12.92 * u if u <= 0.0031308 else 1.055 * u**(1/2.4) - 0.055
-            for u in col]
+    # return [12.92 * u if u <= 0.0031308 else 1.055 * u**(1/2.4) - 0.055
+    #         for u in col]
+    # list comprehension unrolled for speed:
+    return (
+        12.92*col[0] if col[0] <= 0.0031308 else 1.055*col[0]**(1/2.4)-0.055,
+        12.92*col[1] if col[1] <= 0.0031308 else 1.055*col[1]**(1/2.4)-0.055,
+        12.92*col[2] if col[2] <= 0.0031308 else 1.055*col[2]**(1/2.4)-0.055,
+    )
 
 
 def verify_collection_for_scene(scene, objects="lightsheets"):
@@ -143,6 +156,15 @@ def setup_sheet_property(bm):
     return get_sheet, set_sheet
 
 
+def get_uv_map(bm):
+    """Get uv-layer for non-caustic data (if any)."""
+    reserved_layers = {"Lightsheet XY", "Lightsheet XZ", "Caustic Squeeze"}
+    for layer in bm.loops.layers.uv.values():
+        if layer.name not in reserved_layers:
+            return layer
+    return None
+
+
 def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
                         verts=None):
     """Calculate squeeze (= source area / projected area) for given verts."""
@@ -217,12 +239,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
 
     # vertex color and uv-layer access (take the first one that we can find)
     color_layer = caustic_bm.loops.layers.color["Caustic Tint"]
-    reserved_layers = {"Lightsheet XY", "Lightsheet XZ", "Caustic Squeeze"}
-    uv_layer = None
-    for layer in caustic_bm.loops.layers.uv.values():
-        if layer.name not in reserved_layers:
-            uv_layer = layer
-            break  # found one, skip the rest
+    uv_layer = get_uv_map(caustic_bm)
 
     # set transplanted uv-coordinates and vertex colors for faces
     for face in faces:
@@ -238,7 +255,7 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
                 loop[uv_sheet_xz].uv = (sx, sz)
 
                 # set face data
-                loop[color_layer] = linear_to_srgb(cdata.color) + [1]
+                loop[color_layer] = linear_to_srgb(cdata.color) + (1,)
                 if uv_layer is not None:
                     assert cdata.uv is not None, uv_layer.name
                     loop[uv_layer].uv = cdata.uv

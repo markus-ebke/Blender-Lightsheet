@@ -82,15 +82,10 @@ class CausticInfo(bpy.types.PropertyGroup):
         description="If caustic has been finalized",
         default=False
     )
-    delete_coordinates: bpy.props.BoolProperty(
-        name="Delete Lightsheet Coordinates"
-    )
     fade_boundary: bpy.props.BoolProperty(name="Fade Out Boundary")
     remove_dim_faces: bpy.props.BoolProperty(name="Remove Dim Faces")
     emission_cutoff: bpy.props.FloatProperty(name="Emission Cutoff")
-    fix_overlap: bpy.props.BoolProperty(name="Cycles: Fix Overlap Artifacts")
-    shrinkwrap_offset: bpy.props.FloatProperty(
-        name="Shrinkwrap Offset",
-        description="If fix_overlap is used, apply the shrinkwrap modifier, "
-        "but save the offset in case it's needed for animated trace"
+    fix_overlap: bpy.props.BoolProperty(name="Merge Overlapping Faces")
+    delete_coordinates: bpy.props.BoolProperty(
+        name="Delete Lightsheet Coordinates"
     )
