@@ -247,12 +247,12 @@ def auto_trace(context, reference_caustics, frame):
     # finalize new caustics
     for settings_tuple, caustics in finalization_to_caustics.items():
         settings = {
-            "delete_coordinates": settings_tuple[0],
-            "fade_boundary": settings_tuple[1],
-            "remove_dim_faces": settings_tuple[2],
-            "emission_cutoff": settings_tuple[3],
+            "fade_boundary": settings_tuple[0],
+            "remove_dim_faces": settings_tuple[1],
+            "emission_cutoff": settings_tuple[2],
             "delete_empty_caustics": True,
-            "fix_overlap": settings_tuple[4]
+            "fix_overlap": settings_tuple[3],
+            "delete_coordinates": settings_tuple[4],
         }
 
         override = context.copy()
@@ -286,20 +286,27 @@ def categorize_new_caustics(new_caustics, path_to_reference, frame):
             obj.name = f"{ref_name} f{frame:0>3}"
             obj.data.name = obj.name
 
-            # copy offset of shrinkwrap modifier from reference
-            mod = obj.modifiers.get("Shrinkwrap")
+            # copy settings for shrinkwrap modifier (if any)
             ref_mod = ref_obj.modifiers.get("Shrinkwrap")
             if ref_mod is not None:
-                assert ref_mod.type == 'SHRINKWRAP', ref_mod
-                assert ref_mod.target == obj.parent, ref_mod.target
+                # check if reference modifier is valid
+                if ref_mod.type != 'SHRINKWRAP':
+                    msg = f"{ref_obj.name} has no valid shrinkwrap modifier"
+                    raise ValueError(msg)
+                if ref_mod.target != obj.parent:
+                    msg = f"Target of {ref_obj.name} shrinkwrap is not parent"
+                    raise ValueError(msg)
+
+                # get modifier of new caustic and copy offset
+                mod = obj.modifiers.get("Shrinkwrap")
                 assert mod is not None and mod.type == 'SHRINKWRAP', mod
                 assert mod.target == obj.parent, mod.target
-
                 mod.offset = ref_mod.offset
 
             # get refinement settings from reference
+            caustic_info = ref_obj.caustic_info
             settings_list = []
-            for step in ref_obj.caustic_info.refinements:
+            for step in caustic_info.refinements:
                 step_settings = (
                     step.adaptive_subdivision,
                     step.error_threshold,
@@ -309,14 +316,15 @@ def categorize_new_caustics(new_caustics, path_to_reference, frame):
             refinement_to_caustics[tuple(settings_list)].append(obj)
 
             # get finalization settings from reference
-            settings_tuple = (
-                ref_obj.caustic_info.delete_coordinates,
-                ref_obj.caustic_info.fade_boundary,
-                ref_obj.caustic_info.remove_dim_faces,
-                ref_obj.caustic_info.emission_cutoff,
-                ref_obj.caustic_info.fix_overlap
-            )
-            finalization_to_caustics[settings_tuple].append(obj)
+            if caustic_info.finalized:
+                settings_tuple = (
+                    caustic_info.fade_boundary,
+                    caustic_info.remove_dim_faces,
+                    caustic_info.emission_cutoff,
+                    caustic_info.fix_overlap,
+                    caustic_info.delete_coordinates
+                )
+                finalization_to_caustics[settings_tuple].append(obj)
         else:
             # we don't need caustics that have no reference
             delete_caustics.append(obj)

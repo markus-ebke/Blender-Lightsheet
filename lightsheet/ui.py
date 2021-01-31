@@ -29,6 +29,7 @@ Helper functions:
 - display_object_info
 - display_mesh_info
 - display_materials_info
+- display_parent_shrinkwrap
 - display_caustic_raypath
 - display_caustic_refinement
 - display_caustic_finalization
@@ -120,6 +121,10 @@ class LIGHTSHEET_PT_caustic(Panel):
         layout = self.layout
         caustic = context.object
         caustic_info = caustic.caustic_info
+
+        # display parent info
+        box = layout.box().column(align=True)
+        display_parent_shrinkwrap(caustic, box)
 
         # display caustic info and raypath operator
         box = layout.box().column(align=True)
@@ -247,16 +252,34 @@ def display_materials_info(materials, layout):
             for line in lines[1:]:
                 layout.label(text=f"        {line}")
         else:
+            # show possible interactions
             incoming, normal = Vector((0, 0, -1)), Vector((0, 0, 1))
             interactions = surface_shader(incoming, normal)
             inter_kinds = [intr.kind.capitalize() for intr in interactions]
             layout.label(text=f"    Interactions: {inter_kinds}")
 
-        use_volume = volume_params is not None
-        layout.label(text=f"    Volume Absorption: {use_volume}")
+            # show if there is volume
+            use_volume = volume_params is not None
+            layout.label(text=f"    Volume Absorption: {use_volume}")
 
     # clear material cache
     material.cache_clear()
+
+
+def display_parent_shrinkwrap(caustic, layout):
+    """Display info about caustic parent and shrinkwrap modifier."""
+    if caustic.parent is not None:
+        layout.label(text=f"Caustic Parent: {caustic.parent.name}")
+    else:
+        layout.label(text="Caustic Parent: <parent not found>",
+                     icon='ORPHAN_DATA')
+
+    mod = caustic.modifiers.get("Shrinkwrap")
+    if mod is not None:
+        if caustic.parent is not mod.target:
+            layout.label(text="Caustic Parent is not Shrinkwrap Target",
+                         icon='ERROR')
+        layout.label(text=f"Shrinkwrap Offset: {mod.offset:.4f}m")
 
 
 def display_caustic_raypath(caustic_info, layout):
@@ -274,7 +297,7 @@ def display_caustic_raypath(caustic_info, layout):
     for link in caustic_info.path:
         interaction = link.kind.capitalize()
 
-        if link.object:
+        if link.object is not None:
             layout.label(text=f"{interaction}: {link.object.name}")
         else:
             layout.label(text=f"{interaction}: <object not found>",
@@ -300,15 +323,11 @@ def display_caustic_finalization(caustic_info, layout):
     layout.label(text=f"Finalized: {caustic_info.finalized}")
 
     if caustic_info.finalized:
-        layout.label(text=f"Delete lightsheet coords: "
-                          f"{caustic_info.delete_coordinates}")
         layout.label(text=f"Fade out boundary: {caustic_info.fade_boundary}")
         layout.label(text=f"Remove dim faces: {caustic_info.remove_dim_faces}")
         if caustic_info.remove_dim_faces:
             cutoff = caustic_info.emission_cutoff
             layout.label(text=f"    Cutoff: {cutoff:.4f} W/m^2")
-
         layout.label(text=f"Fix overlap: {caustic_info.fix_overlap}")
-        if caustic_info.fix_overlap > 0:
-            offset = caustic_info.shrinkwrap_offset
-            layout.label(text=f"    Shrinkwrap: {offset:.4f}m")
+        layout.label(text="Delete lightsheet coords: "
+                          f"{caustic_info.delete_coordinates}")
