@@ -65,8 +65,6 @@ class LIGHTSHEET_OT_animated_trace(Operator):
 
         # check all caustics
         for obj in context.selected_objects:
-            assert obj.caustic_info.path, obj  # poll failed us!
-
             # check that caustic has a lightsheet
             lightsheet = obj.caustic_info.lightsheet
             if lightsheet is None:
@@ -203,9 +201,10 @@ def auto_trace(context, reference_caustics, frame):
     # remember old caustics
     scene = context.scene
     caustic_coll = scene.collection.children.get(f"Caustics in {scene.name}")
-    assert caustic_coll is not None  # how else can we have reference caustics?
+    if caustic_coll is None:
+        msg = f"No collection named 'Caustics in {scene.name}' found"
+        raise ValueError(msg)
     old_caustics = set(caustic_coll.objects)
-    # print(f"Found {len(old_caustics)} old caustics")
 
     # trace lightsheets
     for lightsheet, path_keys in lightsheet_to_paths.items():
@@ -220,12 +219,10 @@ def auto_trace(context, reference_caustics, frame):
     # collect new caustics, categorize by refinement and finalization settings
     new_caustics = [obj for obj in caustic_coll.objects
                     if obj not in old_caustics]
-    # print(f"Found {len(new_caustics)} new caustics")
     result = categorize_new_caustics(new_caustics, path_to_reference, frame)
     refinement_to_caustics, finalization_to_caustics, delete_caustics = result
 
     # delete unused caustics
-    # print(f"Deleting {len(delete_caustics)} of {len(new_caustics)} caustics")
     for obj in delete_caustics:
         bpy.data.objects.remove(obj)
 
@@ -277,7 +274,7 @@ def categorize_new_caustics(new_caustics, path_to_reference, frame):
         # find matching reference caustic, if none remove caustic
         if path_key in path_to_reference:
             ref_obj = path_to_reference[path_key]
-            assert obj.parent == ref_obj.parent, (obj.parent, ref_obj.parent)
+            # assert obj.parent == ref_obj.parent, (obj.parent, ref_obj.parent)
 
             # add frame number to the name of the new caustic
             ref_name = ref_obj.name
@@ -299,8 +296,8 @@ def categorize_new_caustics(new_caustics, path_to_reference, frame):
 
                 # get modifier of new caustic and copy offset
                 mod = obj.modifiers.get("Shrinkwrap")
-                assert mod is not None and mod.type == 'SHRINKWRAP', mod
-                assert mod.target == obj.parent, mod.target
+                # assert mod is not None and mod.type == 'SHRINKWRAP', mod
+                # assert mod.target == obj.parent, mod.target
                 mod.offset = ref_mod.offset
 
             # get refinement settings from reference

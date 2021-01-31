@@ -66,10 +66,6 @@ from bpy.utils import register_class, unregister_class
 
 # registration
 classes = (
-    ui.LIGHTSHEET_PT_tools,
-    ui.LIGHTSHEET_PT_object,
-    ui.LIGHTSHEET_PT_caustic,
-    ui.LIGHTSHEET_PT_raypath,
     create_lightsheet.LIGHTSHEET_OT_create_lightsheets,
     trace_lightsheet.LIGHTSHEET_OT_trace_lightsheets,
     refine_caustic.LIGHTSHEET_OT_refine_caustics,
@@ -79,6 +75,10 @@ classes = (
     properties.CausticPathLink,
     properties.CausticRefinementSetting,
     properties.CausticInfo,
+    ui.LIGHTSHEET_PT_tools,
+    ui.LIGHTSHEET_PT_object,
+    ui.LIGHTSHEET_PT_caustic,
+    ui.LIGHTSHEET_PT_raypath,
 )
 
 

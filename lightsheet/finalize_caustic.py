@@ -75,7 +75,7 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
     )
     fix_overlap: bpy.props.BoolProperty(
         name="Cycles: Fix Overlap Artifacts",
-        description="WARNING: SLOW AND CREATES A LOT OF GEOMETRY! Fix render "
+        description="WARNING: SLOW AND CREATES LOTS OF GEOMETRY! Fix render "
         "artifacts in Cycles caused by overlapping faces, will merge faces "
         "into a single non-overlapping layer. NOTE: use the offset of the "
         "shrinkwrap modifier to separate different caustics from each other",
@@ -107,9 +107,6 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
 
         # check all caustics
         for obj in context.selected_objects:
-            assert obj.caustic_info.path, obj  # poll failed us!
-            assert not obj.caustic_info.finalized, obj
-
             # check that caustic has a lightsheet
             lightsheet = obj.caustic_info.lightsheet
             if lightsheet is None:
@@ -190,7 +187,7 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         toc = stopwatch()
 
         # report statistics
-        # prog.print_stats()
+        # prog.print_stats()  # uncomment for profiling
         f_stats = f"Finalized {finalized}"
         d_stats = f"deleted {deleted} caustics"
         t_stats = f"{toc-tic:.1f}s"
@@ -246,8 +243,8 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
 
         # merge faces in affine planes and add to new bmesh
         for projector, faces in proper_planes:
-            vert_map = merge_in_plane(caustic_bm, projector, faces, new_bm,
-                                      vert_map)
+            vert_map = merge_within_plane(caustic_bm, projector, faces,
+                                          new_bm, vert_map)
             prog.update_progress(step=prog.current_step+len(faces))
 
         # replace old bmesh by new merged bmesh
@@ -297,7 +294,7 @@ def remove_layers(caustic_bm, delete_coordinates):
 
 def remove_dim_faces(caustic_bm, light, emission_cutoff):
     """Remove invisible faces and cleanup resulting mesh."""
-    assert light is not None and light.type == 'LIGHT', light
+    # assert light is not None and light.type == 'LIGHT', light
 
     # emission strength and color from caustic
     squeeze_layer = caustic_bm.loops.layers.uv["Caustic Squeeze"]
@@ -307,7 +304,7 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
     if light.data.type == 'SUN':
         light_strength = light.data.energy / pi
     else:
-        assert light.data.type in {'SPOT', 'POINT'}, light
+        # assert light.data.type in {'SPOT', 'POINT'}, light
         light_strength = light.data.energy / (4 * pi**2)
     light_strength *= light.data.color.v
 
@@ -446,12 +443,12 @@ def create_affine_plane(face):
 
     # check that v1 maps to origin and the other points map to xy-plane
     # and have correct side lengths
-    p1, p2, p3 = [projector @ co for co in (v1, v2, v3)]
-    assert p1.length < 1e-5, (p1, p1.length)
-    assert abs(p2.z) < 1e-5, (p2, p2.z)
-    assert abs(p3.z) < 1e-5, (p3, p3.z)
-    assert abs(p2.length - s1.length) < 1e-5, (p2.length, s1.length)
-    assert abs(p3.length - s2.length) < 1e-5, (p3.length. s2.length)
+    # p1, p2, p3 = [projector @ co for co in (v1, v2, v3)]
+    # assert p1.length < 1e-5, (p1, p1.length)
+    # assert abs(p2.z) < 1e-5, (p2, p2.z)
+    # assert abs(p3.z) < 1e-5, (p3, p3.z)
+    # assert abs(p2.length - s1.length) < 1e-5, (p2.length, s1.length)
+    # assert abs(p3.length - s2.length) < 1e-5, (p3.length. s2.length)
 
     return (projector, [face])
 
@@ -488,7 +485,7 @@ def bmesh_duplicate_faces(source_bm, faces):
 
         # copy face data from old loops to new loops
         for loop, new_loop in zip(face.loops, new_face.loops):
-            assert new_loop.vert is vert_map[loop.vert]
+            # assert new_loop.vert is vert_map[loop.vert]
             new_loop[new_squeeze_layer].uv = loop[squeeze_layer].uv
             new_loop[new_color_layer] = loop[color_layer]
 
@@ -496,15 +493,15 @@ def bmesh_duplicate_faces(source_bm, faces):
     if uv_layer is not None:
         new_uv_layer = new_bm.loops.layers.uv.new(uv_layer.name)
         for face, new_face in zip(faces, new_bm.faces):
-            assert new_face is face_map[face], (new_face, face_map[face])
+            # assert new_face is face_map[face], (new_face, face_map[face])
             for loop, new_loop in zip(face.loops, new_face.loops):
-                assert new_loop.vert is vert_map[loop.vert]
+                # assert new_loop.vert is vert_map[loop.vert]
                 new_loop[new_uv_layer] = loop[uv_layer]
 
     return new_bm, vert_map
 
 
-def merge_in_plane(bm, projector, faces, new_bm, vert_map):
+def merge_within_plane(bm, projector, faces, new_bm, vert_map):
     """Merge faces that lie in the projector plane and add to new bmesh."""
     # get caustic layers
     squeeze_layer = bm.loops.layers.uv["Caustic Squeeze"]
@@ -578,7 +575,7 @@ def merge_in_plane(bm, projector, faces, new_bm, vert_map):
     new_color_layer = new_bm.loops.layers.color["Caustic Tint"]
     if uv_layer is not None:
         new_uv_layer = utils.get_uv_map(new_bm)
-        assert new_uv_layer is not None
+        # assert new_uv_layer is not None
 
     # rebuild faces in new bmesh and interpolate their caustic color
     linear_to_srgb = utils.linear_to_srgb

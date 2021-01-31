@@ -74,7 +74,6 @@ class LIGHTSHEET_OT_trace_lightsheets(Operator):
 
         # cancel operator for area lights
         for obj in context.selected_objects:
-            assert obj.parent is not None, obj  # poll failed us!
             light_type = obj.parent.data.type
             if light_type not in {'SUN', 'SPOT', 'POINT'}:
                 reasons = f"{light_type.lower()} lights are not supported"
@@ -114,7 +113,7 @@ class LIGHTSHEET_OT_trace_lightsheets(Operator):
             coll.objects.link(obj)
 
         # report statistics
-        # prog.print_stats()
+        # prog.print_stats()  # uncomment for profiling
         c_stats = f"{len(all_caustics)} caustic(s)"
         t_stats = f"{toc-tic:.1f}s"
         self.report({'INFO'}, f"Created {c_stats} in {t_stats}")
@@ -127,8 +126,8 @@ class LIGHTSHEET_OT_trace_lightsheets(Operator):
 # -----------------------------------------------------------------------------
 def verify_lightsheet(obj, scene):
     """Ensure that the given object can be used as a lightsheet."""
-    assert obj.type == 'MESH'
-    assert obj.parent is not None and obj.parent.type == 'LIGHT'
+    # assert obj.type == 'MESH'
+    # assert obj.parent is not None and obj.parent.type == 'LIGHT'
 
     # verify coordinate layers
     bm = bmesh.new()
@@ -150,8 +149,6 @@ def verify_lightsheet(obj, scene):
 
 def trace_lightsheet(lightsheet, depsgraph, max_bounces, prog):
     """Trace rays from lighsheet and return list of caustics."""
-    assert lightsheet.parent is not None and lightsheet.parent.type == 'LIGHT'
-
     # convert lightsheet to bmesh
     lightsheet_bm = bmesh.new(use_operators=False)
     lightsheet_bm.from_mesh(lightsheet.data)
@@ -215,13 +212,13 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
 
     # parent of caustic = object in last link
     parent_obj = chain[-1].object
-    assert chain[-1].kind == 'DIFFUSE', chain  # check consistency of path
+    # assert chain[-1].kind == 'DIFFUSE', chain  # check consistency of path
 
     # consistency check for copied uv-coordinates from the parent object
-    if "UVMap" in caustic_bm.loops.layers.uv is not None:
-        assert parent_obj.data.uv_layers
-    else:
-        assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
+    # if "UVMap" in caustic_bm.loops.layers.uv is not None:
+    #     assert parent_obj.data.uv_layers
+    # else:
+    #     assert not parent_obj.data.uv_layers, parent_obj.data.uv_layers[:]
 
     # think of a good name
     name = f"{lightsheet.parent.name} on {parent_obj.name} Caustic"
@@ -234,7 +231,7 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
     # rename transplanted uvmap to avoid confusion
     if parent_obj.data.uv_layers:
         parent_uv_layer = parent_obj.data.uv_layers.active
-        assert parent_obj.data.uv_layers.active is not None
+        # assert parent_obj.data.uv_layers.active is not None
         me.uv_layers["UVMap"].name = parent_uv_layer.name
 
     # before setting parent, undo parent transform
@@ -303,7 +300,7 @@ def setup_caustic_bmesh(sheet_to_data):
 
     # create vertices and given positions and set sheet coordinates
     for sheet_pos, cdata in sheet_to_data.items():
-        assert cdata is not None, sheet_pos
+        # assert cdata is not None, sheet_pos
 
         # create caustic vertex
         vert = caustic_bm.verts.new(cdata.location)
@@ -317,8 +314,8 @@ def setup_caustic_bmesh(sheet_to_data):
 
 def fill_caustic_faces(caustic_bm, lightsheet):
     """Fill in faces of caustic bmesh using faces from lightsheet."""
-    assert len(caustic_bm.edges) == 0, len(caustic_bm.edges)
-    assert len(caustic_bm.faces) == 0, len(caustic_bm.faces)
+    # assert len(caustic_bm.edges) == 0, len(caustic_bm.edges)
+    # assert len(caustic_bm.faces) == 0, len(caustic_bm.faces)
 
     # convert lightsheet to bmesh
     ls_bm = bmesh.new()
@@ -336,7 +333,7 @@ def fill_caustic_faces(caustic_bm, lightsheet):
     sheet_to_caustic_vert = dict()
     for vert in caustic_bm.verts:
         sheet_key = caustic_get_sheet(vert).to_tuple()
-        assert sheet_key not in sheet_to_caustic_vert
+        # assert sheet_key not in sheet_to_caustic_vert
         sheet_to_caustic_vert[sheet_key] = vert
 
     # iterate over lighsheet faces and create corresponding caustic faces
@@ -357,7 +354,7 @@ def fill_caustic_faces(caustic_bm, lightsheet):
                 caustic_bm.edges.new(caustic_verts)
         elif len(caustic_verts) > 2:
             # create new caustic face
-            assert len(caustic_verts) == 3, len(caustic_verts)
+            # assert len(caustic_verts) == 3, len(caustic_verts)
             caustic_bm.faces.new(caustic_verts)
     ls_bm.free()
 
@@ -367,8 +364,8 @@ def chain_complexity(chain):
     weights = {'TRANSPARENT': 0, 'REFLECT': 1, 'REFRACT': 2}
 
     # check that only the last link is diffuse
-    assert chain[-1].kind == 'DIFFUSE', chain[-1]
-    assert all(link.kind in weights for link in chain[:-1])
+    # assert chain[-1].kind == 'DIFFUSE', chain[-1]
+    # assert all(link.kind in weights for link in chain[:-1])
 
     # complexity = kind of interactions in base 3
     cplx = 0

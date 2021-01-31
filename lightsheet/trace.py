@@ -206,7 +206,7 @@ def trace_scene(ray, depsgraph, max_bounces):
                     cdata = CausticData(location, color, uv, perp, face_index)
                     caustic_data.append((chain, cdata))
             elif len(old_chain) < max_bounces:
-                assert new_direction is not None
+                # assert new_direction is not None
 
                 # move the starting point a safe distance away from the object
                 offset = copysign(1e-5, new_direction.dot(face_normal))
@@ -246,9 +246,9 @@ def trace_scene(ray, depsgraph, max_bounces):
 
 def trace_along_chain(ray, depsgraph, chain_to_follow):
     """(Re)trace a ray, but only follow the given chain of interactions."""
-    assert len(chain_to_follow) > 0
-    assert all(link.kind != 'DIFFUSE' for link in chain_to_follow[:-1])
-    assert chain_to_follow[-1].kind == 'DIFFUSE'
+    # assert len(chain_to_follow) > 0
+    # assert all(link.kind != 'DIFFUSE' for link in chain_to_follow[:-1])
+    # assert chain_to_follow[-1].kind == 'DIFFUSE'
 
     # record intermediate locations for visualizing the raypath
     trail = [ray.origin]
@@ -263,7 +263,7 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
         # if we missed the object, the caustic will be empty at this position
         if hit_obj is None:
             return (None, trail)
-        assert hit_obj is obj, (hit_obj, obj)
+        # assert hit_obj is obj, (hit_obj, obj)
 
         # get hit face
         face = get_eval_mesh(obj, depsgraph).polygons[face_index]
@@ -301,10 +301,10 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
                 perp = -face_normal
 
             # setup data
-            chain = old_chain + (Link(obj, kind, None),)
+            # chain = old_chain + (Link(obj, kind, None),)
             cdata = CausticData(location, color, uv, perp, face_index)
         else:
-            assert new_direction is not None
+            # assert new_direction is not None
 
             # move the starting point a safe distance away from the object
             offset = copysign(1e-5, new_direction.dot(face_normal))
@@ -339,10 +339,10 @@ def trace_along_chain(ray, depsgraph, chain_to_follow):
             ray = Ray(new_origin, new_direction, new_color, new_chain)
 
     # check chain
-    assert len(chain) == len(chain_to_follow)
-    for link_followed, link_to_follow in zip(chain, chain_to_follow):
-        assert link_followed.object == link_to_follow.object
-        assert link_followed.kind == link_to_follow.kind
+    # assert len(chain) == len(chain_to_follow)
+    # for link_followed, link_to_follow in zip(chain, chain_to_follow):
+    #     assert link_followed.object == link_to_follow.object
+    #     assert link_followed.kind == link_to_follow.kind
 
     return (cdata, trail)
 
@@ -402,7 +402,7 @@ def calc_normal(obj, depsgraph, face_index, point):
     # tessellate face and find the triangle that contains the point
     # if no triangle is found (is that even possible???) use the last one
     triangles = tessellate_polygon((vert_co,))
-    assert len(triangles) > 0  # will loop => will define tri and v1, v2, v3
+    # assert len(triangles) > 0  # will loop => will define tri and v1, v2, v3
     for tri in triangles:
         v1, v2, v3 = vert_co[tri[0]], vert_co[tri[1]], vert_co[tri[2]]
         if intersect_point_tri(point, v1, v2, v3):
@@ -440,7 +440,7 @@ def calc_uv(obj, depsgraph, face_index, point):
     # tessellate face and find the triangle that contains the point
     # if no triangle is found (is that even possible???) use the last one
     triangles = tessellate_polygon((vert_co,))
-    assert len(triangles) > 0  # will loop => will define tri and v1, v2, v3
+    # assert len(triangles) > 0  # will loop => will define tri and v1, v2, v3
     for tri in triangles:
         v1, v2, v3 = vert_co[tri[0]], vert_co[tri[1]], vert_co[tri[2]]
         if intersect_point_tri(point, v1, v2, v3):

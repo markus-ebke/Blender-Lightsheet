@@ -80,9 +80,6 @@ class LIGHTSHEET_OT_refine_caustics(Operator):
 
         # check all caustics
         for obj in context.selected_objects:
-            assert obj.caustic_info.path, obj  # poll failed us!
-            assert not obj.caustic_info.finalized, obj
-
             # check that caustic has a lightsheet
             lightsheet = obj.caustic_info.lightsheet
             if lightsheet is None:
@@ -150,7 +147,7 @@ class LIGHTSHEET_OT_refine_caustics(Operator):
         toc = stopwatch()
 
         # report statistics
-        # prog.print_stats()
+        # prog.print_stats()  # uncomment for profiling
         v_stats = f"Added {num_verts_now-num_verts_before:,} verts"
         o_stats = f"{len(caustics)} caustics"
         t_stats = f"{toc-tic:.1f}s"
@@ -172,7 +169,7 @@ def refine_caustic(caustic, depsgraph, error_threshold, grow_boundary, prog):
     # caustic info
     caustic_info = caustic.caustic_info
     lightsheet = caustic_info.lightsheet
-    assert lightsheet is not None
+    # assert lightsheet is not None
     first_ray = trace.setup_lightsheet_first_ray(lightsheet)
 
     # chain for tracing
@@ -276,7 +273,7 @@ def refine_caustic(caustic, depsgraph, error_threshold, grow_boundary, prog):
         boundary_verts = []
     prog.update_progress()
 
-    # ensure triangles
+    # ensure triangles (actually this should not be necessary)
     triang_less = [face for face in caustic_bm.faces if len(face.edges) > 3]
     if triang_less:
         print(f"Lightsheet: We had to triangulate {len(triang_less)} faces")
@@ -314,7 +311,7 @@ def refine_caustic(caustic, depsgraph, error_threshold, grow_boundary, prog):
     bmesh.ops.delete(caustic_bm, geom=dead_verts, context='VERTS')
     utils.bmesh_delete_loose(caustic_bm)
     new_verts = [vert for vert in new_verts if vert.is_valid]
-    assert all(data is not None for data in sheet_to_data.values())
+    # assert all(data is not None for data in sheet_to_data.values())
     prog.update_progress()
 
     # gather the vertices whose neighbours have changed (to recalculate
@@ -377,7 +374,6 @@ def split_caustic_edges(caustic_bm, refine_edges):
     while last_added:  # crawl through the mesh and select edges that we need
         for edge in last_added:  # only last edges can change futher selection
             for face in edge.link_faces:
-                assert len(face.edges) == 3  # must be a triangle
                 not_refined = [ed for ed in face.edges
                                if ed not in refine_edges]
                 if len(not_refined) == 1:
@@ -408,7 +404,7 @@ def split_caustic_edges(caustic_bm, refine_edges):
         # one of the endpoints of a refined edge is a newly added vertex
         v1, v2 = edge.verts
         vert = v1 if v1 in dirty_verts else v2
-        assert vert in dirty_verts, sheet_pos
+        # assert vert in dirty_verts, sheet_pos
 
         set_sheet(vert, sheet_pos)
         split_verts.append(vert)
@@ -441,16 +437,16 @@ def grow_caustic_boundary(caustic_bm):
         wire_edges, boundary_edges, inside_edges = [], [], []
         for edge in vert.link_edges:
             if edge.is_wire:
-                assert len(edge.link_faces) == 0
+                # assert len(edge.link_faces) == 0
                 wire_edges.append(edge)
             elif edge.is_boundary:
-                assert len(edge.link_faces) == 1
+                # assert len(edge.link_faces) == 1
                 boundary_edges.append(edge)
             else:
-                assert len(edge.link_faces) == 2
+                # assert len(edge.link_faces) == 2
                 inside_edges.append(edge)
 
-        assert len(boundary_edges) in (0, 2, 4), len(boundary_edges)
+        # assert len(boundary_edges) in (0, 2, 4), len(boundary_edges)
         conn = (wire_edges, boundary_edges, inside_edges)
         original_boundary_connections[vert] = conn
 
@@ -480,12 +476,12 @@ def grow_caustic_boundary(caustic_bm):
         vert_first, vert_second = edge.verts
 
         # get the vertex opposite of the edge
-        assert len(edge.link_faces) == 1
-        face = edge.link_faces[0]
-        assert len(face.verts) == 3
-        other_verts = [ve for ve in face.verts if ve not in edge.verts]
-        assert len(other_verts) == 1
-        vert_opposite = other_verts[0]
+        # assert len(edge.link_faces) == 1
+        vert_opposite = None
+        for ve in edge.link_faces[0].verts:
+            if ve not in edge.verts:
+                vert_opposite = ve
+                break
 
         # sheet coordinates of the three vertices
         sheet_first = get_sheet(vert_first)
@@ -513,12 +509,12 @@ def grow_caustic_boundary(caustic_bm):
 
         # degree = number of neighbours
         degree = len(boundary_edges) + len(inside_edges)
-        assert 2 <= degree <= 6, (sheet_vert, boundary_edges, inside_edges)
+        # assert 2 <= degree <= 6, (sheet_vert, boundary_edges, inside_edges)
 
         if degree == 2:
             # 300° outside angle, needs two more vertices to create three faces
-            assert len(boundary_edges) == 2, (sheet_vert, boundary_edges)
-            # assert len(inside_edges) == 0, (sheet_vert, inside_edges)
+            # assert len(boundary_edges) == 2, sheet_vert
+            # assert len(inside_edges) == 0, sheet_vert
 
             # get sheet coordinates of neighbouring vertices
             verts_fan = []
@@ -548,8 +544,8 @@ def grow_caustic_boundary(caustic_bm):
             create_triangle(vert, vert_fan_b, vert_outside_b)
         elif degree == 3:
             # 240° outside angle, needs one more vertex to create two faces
-            assert len(boundary_edges) == 2, (sheet_vert, boundary_edges)
-            assert len(inside_edges) == 1, (sheet_vert, inside_edges)
+            # assert len(boundary_edges) == 2, sheet_vert
+            # assert len(inside_edges) == 1, sheet_vert
 
             # get vertex of edge on the inside and its sheet coordinates
             inside_edge = inside_edges[0]
@@ -571,8 +567,8 @@ def grow_caustic_boundary(caustic_bm):
             create_triangle(vert, vert_fan, vert_outside_b)
         elif degree == 4:
             # the vert is at an 180° angle or at an X-shaped intersection
-            assert len(boundary_edges) in (2, 4), (sheet_vert, boundary_edges)
-            # assert len(inside_edges) in (0, 2), (sheet_vert, inside_edges)
+            # assert len(boundary_edges) in (2, 4), sheet_vert
+            # assert len(inside_edges) in (0, 2), sheet_vert
 
             if len(boundary_edges) == 2:  # 180° angle
                 edge_a, edge_b = boundary_edges
@@ -582,7 +578,7 @@ def grow_caustic_boundary(caustic_bm):
             else:  # X-shaped intersection of two 120° angles
                 # pairs of boundary edges have the same outside vertex, merge
                 # the corresponding pairs of outside vertices
-                assert len(boundary_edges) == 4, (sheet_vert, boundary_edges)
+                # assert len(boundary_edges) == 4, sheet_vert
 
                 # get outside verts
                 outside_stuff = []
@@ -657,6 +653,8 @@ def grow_caustic_boundary(caustic_bm):
     ret = bmesh.ops.face_attribute_fill(caustic_bm, faces=new_faces,
                                         use_normals=False,  # calc normal later
                                         use_data=True)
-    assert len(ret["faces_fail"]) == 0, ret["faces_fail"]
+    if len(ret['faces_fail']) > 0:
+        msg = f"face_attribute_fill failed for {len(ret['faces_fail'])} faces"
+        raise RuntimeError(msg)
 
     return outside_verts

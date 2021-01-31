@@ -129,12 +129,12 @@ def diffuse_surface_shader(ray_direction, normal):
 
 # setup surface interaction from BSDF node ------------------------------------
 def setup_node_diffuse(node):
-    assert node.type == 'BSDF_DIFFUSE'
+    # assert node.type == 'BSDF_DIFFUSE'
     return diffuse_surface_shader
 
 
 def setup_node_glossy(node):
-    assert node.type == 'BSDF_GLOSSY', node.type
+    # assert node.type == 'BSDF_GLOSSY', node.type
 
     # don't handle reflection if roughness is nonzero
     if (node.inputs['Roughness'].default_value > 0.0 and
@@ -153,7 +153,7 @@ def setup_node_glossy(node):
 
 
 def setup_node_transparent(node):
-    assert node.type == 'BSDF_TRANSPARENT', node.type
+    # assert node.type == 'BSDF_TRANSPARENT', node.type
 
     # node settings
     color_srgb = node.inputs['Color'].default_value[:3]
@@ -166,7 +166,7 @@ def setup_node_transparent(node):
 
 
 def setup_node_refraction(node):
-    assert node.type == 'BSDF_REFRACTION', node.type
+    # assert node.type == 'BSDF_REFRACTION', node.type
 
     # don't handle refraction if roughness is nonzero
     if (node.inputs['Roughness'].default_value > 0.0 and
@@ -182,14 +182,13 @@ def setup_node_refraction(node):
         refra = refract(ray_direction, normal, ior)
         if refra is not None:
             return [Interaction('REFRACT', refra, color)]
-        else:
-            return []
+        return []
 
     return surface_shader
 
 
 def setup_node_glass(node):
-    assert node.type == 'BSDF_GLASS', node.type
+    # assert node.type == 'BSDF_GLASS', node.type
 
     # don't handle reflection or refraction for rough glass
     if (node.inputs['Roughness'].default_value > 0.0 and
@@ -222,7 +221,7 @@ def setup_node_glass(node):
 
 
 def setup_node_principled(node):
-    assert node.type == 'BSDF_PRINCIPLED', node.type
+    # assert node.type == 'BSDF_PRINCIPLED', node.type
 
     # node settings
     color_srgb = node.inputs['Base Color'].default_value[:3]
@@ -296,6 +295,8 @@ def setup_node_principled(node):
 
 
 def setup_scalar_node(node, from_socket_identifier=None):
+    # assert from_socket_identifier in {'Fresnel', 'Facing'}
+
     if node.type == 'FRESNEL':  # fresnel node
         ior = node.inputs['IOR'].default_value
 
@@ -311,8 +312,7 @@ def setup_scalar_node(node, from_socket_identifier=None):
             def fac(incoming, normal):
                 return fresnel(incoming, normal, ior)
         else:
-            assert from_socket_identifier == 'Facing'
-
+            # from_socket_identifier == 'Facing'
             def fac(incoming, normal):
                 dot = abs(incoming.dot(normal))
                 if blend <= 0.5:
@@ -328,7 +328,7 @@ def setup_scalar_node(node, from_socket_identifier=None):
 
 
 def setup_node_mix(node):
-    assert node.type == 'MIX_SHADER', node.type
+    # assert node.type == 'MIX_SHADER', node.type
 
     # mix factor
     if node.inputs[0].links:
@@ -693,7 +693,7 @@ def add_drivers_from_light(color, strength, light):
         # strength of sun light is already in W/m^2
         driver.expression = "energy / pi"
     else:
-        assert light.data.type in {'SPOT', 'POINT'}, light
+        # assert light.data.type in {'SPOT', 'POINT'}, light
         # point and spot lights emit their energy over a sphere (area = 4*pi)
         driver.expression = "energy / (4 * pi * pi)"
 

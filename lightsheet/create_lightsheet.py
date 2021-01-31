@@ -69,7 +69,6 @@ class LIGHTSHEET_OT_create_lightsheets(Operator):
 
         # cancel operator for area lights
         for obj in context.selected_objects:
-            assert obj.type == 'LIGHT', (obj, obj.type)  # poll failed us!
             light_type = obj.data.type
             if light_type not in {'SUN', 'SPOT', 'POINT'}:
                 reasons = f"{light_type.lower()} lights are not supported"
@@ -104,8 +103,6 @@ class LIGHTSHEET_OT_create_lightsheets(Operator):
 # -----------------------------------------------------------------------------
 def setup_lightsheet(light, resolution):
     """Setup lightsheet object, type of lightsheet depends on type of light."""
-    assert light.type == 'LIGHT', (light, light.type)  # poll failed us!
-
     light_type = light.data.type
     if light_type == 'SUN':
         # sun gets a square grid, because we don't know anything better
@@ -124,7 +121,7 @@ def setup_lightsheet(light, resolution):
         for vert in bm.verts:
             vert.co.z = -1
     else:
-        assert light_type == 'POINT', (light, light_type)  # invoke failed us!
+        # assert light_type == 'POINT', (light, light_type)
         # lightsheet that surrounds the point light
         bm = create_bmesh_sphere(resolution)
     lightsheet = convert_bmesh_to_lightsheet(bm, light)
@@ -216,7 +213,7 @@ def create_bmesh_sphere(resolution, radius=1.0):
     bm = bmesh.new()
     shared_verts = []
     for face in bm_template.faces:
-        assert len(face.verts) == 3, len(face.verts)
+        # assert len(face.verts) == 3, len(face.verts)
         target_triangle = [vert.co for vert in face.verts]
 
         # place vertices
@@ -270,7 +267,7 @@ def convert_bmesh_to_lightsheet(bm, light):
         for vert in bm.verts:
             vert.co.z = 0.0
     else:
-        assert light.data.type in {'SPOT', 'POINT'}, light.data.type
+        # assert light.data.type in {'SPOT', 'POINT'}, light.data.type
         # lightsheet should be spherical
         for vert in bm.verts:
             vert.co.normalize()

@@ -199,8 +199,6 @@ def set_caustic_squeeze(caustic_bm, matrix_sheet=None, matrix_caustic=None,
                 # found face in cache
                 source_area, target_area = face_to_area[face]
             else:
-                assert len(face.verts) == 3, face.verts[:]
-
                 # gather coordinates and sheet positions of caustic face
                 source_triangle = []
                 target_triangle = []
@@ -257,7 +255,6 @@ def set_caustic_face_data(caustic_bm, sheet_to_data, faces=None):
                 # set face data
                 loop[color_layer] = linear_to_srgb(cdata.color) + (1,)
                 if uv_layer is not None:
-                    assert cdata.uv is not None, uv_layer.name
                     loop[uv_layer].uv = cdata.uv
                 vert_normal_sum += cdata.perp
 

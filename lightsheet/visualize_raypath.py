@@ -51,7 +51,6 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
 
     def invoke(self, context, event):
         obj = context.object
-        assert obj is not None
 
         # cancel with error message
         def cancel(obj, reasons):
@@ -122,7 +121,7 @@ def gather_trails(caustic, depsgraph):
     """Visualize the raypath of the selected vertices in caustic."""
     # setup rays from lightsheet
     lightsheet = caustic.caustic_info.lightsheet
-    assert lightsheet is not None
+    # assert lightsheet is not None
     first_ray = trace.setup_lightsheet_first_ray(lightsheet)
 
     # chain for retracing

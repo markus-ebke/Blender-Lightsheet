@@ -160,7 +160,6 @@ class LIGHTSHEET_PT_raypath(Panel):
         layout = self.layout
         obj = context.object
         caustic = obj.parent
-        assert caustic is not None
 
         # display caustic info
         display_caustic_raypath(caustic.caustic_info, layout.column())
