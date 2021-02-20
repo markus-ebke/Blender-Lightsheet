@@ -49,7 +49,7 @@ class LIGHTSHEET_OT_create_lightsheets(Operator):
 
     resolution: bpy.props.IntProperty(
         name="Resolution", description="Resolution of lightsheet mesh",
-        default=10, min=2
+        default=50, min=2
     )
 
     @classmethod

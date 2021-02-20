@@ -136,6 +136,7 @@ class LIGHTSHEET_OT_animated_trace(Operator):
             wm.progress_update(frame)
             # print(f"Lightsheet: Animating trace for frame {frame}")
 
+            tic_frame = stopwatch()
             context.scene.frame_set(frame)
             if frame == self.frame_reference:
                 # caustics for this frame are the reference caustics
@@ -151,12 +152,12 @@ class LIGHTSHEET_OT_animated_trace(Operator):
             else:
                 # trace caustics for this frame
                 new_caustics = auto_trace(context, reference_caustics, frame)
+            toc_frame = stopwatch()
 
             # check for errors
             if new_caustics is None:
                 return {'CANCELLED'}
 
-            print(f"Lightsheet: {len(new_caustics)} caustics in frame {frame}")
             # unhide the caustic only for this one frame
             for obj in new_caustics:
                 # show in this frame
@@ -170,6 +171,10 @@ class LIGHTSHEET_OT_animated_trace(Operator):
                 obj.keyframe_insert(data_path="hide_render", frame=frame - 1)
                 obj.keyframe_insert(data_path="hide_viewport", frame=frame + 1)
                 obj.keyframe_insert(data_path="hide_render", frame=frame + 1)
+
+            # report statistics for this frame
+            print(f"Lightsheet: Traced {len(new_caustics)} caustics in frame "
+                  f"{frame} in {toc_frame-tic_frame:.1f}s")
 
         # reset scene
         wm.progress_update(self.frame_end + 1)

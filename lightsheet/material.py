@@ -445,8 +445,11 @@ def get_material_shader(mat):
         volume_node = volume_links[0].from_node
         if volume_node.type == 'VOLUME_ABSORPTION':
             color_srgb = volume_node.inputs['Color'].default_value[:3]
+            # freeze color because it will be put into a link for a chain
+            # which will be used as a key for a dict and the key must be
+            # hashable
             volume_params = (
-                Color(utils.srgb_to_linear(color_srgb)),
+                Color(utils.srgb_to_linear(color_srgb)).freeze(),
                 volume_node.inputs['Density'].default_value
             )
 
