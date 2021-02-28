@@ -46,7 +46,7 @@ from mathutils import Vector
 from mathutils.geometry import (barycentric_transform, intersect_point_tri,
                                 tessellate_polygon)
 
-from lightsheet import material
+from lightsheet import material, utils
 
 # -----------------------------------------------------------------------------
 # Global variables
@@ -126,15 +126,24 @@ def setup_lightsheet_first_ray(lightsheet, color=(1.0, 1.0, 1.0)):
 @contextmanager
 def configure_for_trace(context):
     """Contextmanager that configures the depsgraph for caustic tracing."""
+    # gather lightsheets and caustics
+    ls_coll = utils.get_collection_for_scene(context.scene, "lightsheets",
+                                             force=False)
+    cau_coll = utils.get_collection_for_scene(context.scene, "caustics",
+                                              force=False)
+
     # hide lightsheets and caustics from raycast, note that hiding selected
     # objects will unselect them
     hidden = []
-    for coll in context.scene.collection.children:
-        if (coll.name.startswith("Lightsheets")
-                or coll.name.startswith("Caustics")):
-            for obj in coll.objects:
-                hidden.append((obj, obj.hide_viewport, obj.select_get()))
-                obj.hide_viewport = True
+    for coll in [ls_coll, cau_coll]:
+        if coll is None:
+            # we have nothing to hide here
+            continue
+
+        # hide every object in this collection, but save the previous state
+        for obj in coll.objects:
+            hidden.append((obj, obj.hide_viewport, obj.select_get()))
+            obj.hide_viewport = True
 
     # make sure that caches are clean
     cache_clear()

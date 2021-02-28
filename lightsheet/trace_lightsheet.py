@@ -108,7 +108,7 @@ class LIGHTSHEET_OT_trace_lightsheets(Operator):
         toc = stopwatch()
 
         # add caustics to the right scene collection
-        coll = utils.verify_collection_for_scene(context.scene, "caustics")
+        coll = utils.get_collection_for_scene(context.scene, "caustics")
         for obj in all_caustics:
             coll.objects.link(obj)
 
@@ -139,7 +139,7 @@ def verify_lightsheet(obj, scene):
 
     # make sure that lightsheet belongs to the right collection, otherwise we
     # can't hide it for tracing
-    ls_coll = utils.verify_collection_for_scene(scene, "lightsheets")
+    ls_coll = utils.get_collection_for_scene(scene, "lightsheets")
     if (obj.name not in ls_coll.objects
             or obj is not ls_coll.objects.get(obj.name)):
         ls_coll.objects.link(obj)

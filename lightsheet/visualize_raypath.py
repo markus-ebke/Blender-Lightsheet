@@ -103,7 +103,7 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
             return {'CANCELLED'}
 
         # add path to caustic collection
-        coll = utils.verify_collection_for_scene(context.scene, "caustics")
+        coll = utils.get_collection_for_scene(context.scene, "caustics")
         coll.objects.link(path_obj)
 
         # report statistics

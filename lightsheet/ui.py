@@ -40,7 +40,7 @@ import textwrap
 from bpy.types import Panel
 from mathutils import Vector
 
-from lightsheet import material
+from lightsheet import material, utils
 
 
 class LIGHTSHEET_PT_tools(Panel):
@@ -87,8 +87,9 @@ class LIGHTSHEET_PT_object(Panel):
             layout.label(text=f"Name: {obj.name}")
 
             # type of object and relation to lightsheet add-on
-            ls_coll_name = f"Lightsheets in {context.scene.name}"
-            ls_coll = context.scene.collection.children.get(ls_coll_name)
+            ls_coll = utils.get_collection_for_scene(context.scene,
+                                                     "lightsheets",
+                                                     force=False)
             box = layout.box().column(align=True)
             display_object_info(obj, ls_coll, box)
 

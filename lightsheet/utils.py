@@ -18,14 +18,14 @@
 #  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 # ##### END GPL LICENSE BLOCK #####
-"""Helper functions used by more than one operator.
+"""Helper functions used in other files.
 
 - bmesh_delete_loose (bmesh reimplementation of bpy.ops.mesh.delete_loose, used
     by trace_lightsheet, refine_caustic and finalize_caustic)
 - srgb_to_linear (used in finalize_caustic and material)
 - linear_to_srgb (used here in set_caustic_face_data and in finalize_caustic)
-- verify_collection_for_scene (used by create_lightsheet, trace_lightsheet and
-    visualize_raypath)
+- get_collection_for_scene (used by create_lightsheet, trace_lightsheet,
+    animated_trace, visualize_raypath, ui and trace)
 - verify_lightsheet_layers (used by create_lightsheet and trace_lightsheet)
 - setup_sheet_property (used by trace_lightsheet and refine_caustics)
 - get_uv_map (used here in set_caustic_face_data and in finalize_caustics)
@@ -81,7 +81,7 @@ def linear_to_srgb(col):
     )
 
 
-def verify_collection_for_scene(scene, objects="lightsheets"):
+def get_collection_for_scene(scene, objects="lightsheets", force=True):
     """Get or create the lightsheets/caustics collection for the scene."""
     coll_name = f"{objects.capitalize()} in {scene.name}"
 
@@ -91,11 +91,16 @@ def verify_collection_for_scene(scene, objects="lightsheets"):
         # collection not in scene, is it anywhere in the file?
         coll = bpy.data.collections.get(coll_name)
         if coll is None:
+            # if we don't want to create a new collection, return nothing
+            if not force:
+                return None
+
             # create a new collection
             coll = bpy.data.collections.new(coll_name)
 
-        # don't forget to link to scene
-        scene.collection.children.link(coll)
+        # don't forget to link to scene (if that is wanted)
+        if force:
+            scene.collection.children.link(coll)
 
     return coll
 

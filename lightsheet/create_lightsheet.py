@@ -86,7 +86,7 @@ class LIGHTSHEET_OT_create_lightsheets(Operator):
         toc = stopwatch()
 
         # add lightsheets to the right scene collection
-        coll = utils.verify_collection_for_scene(context.scene, "lightsheets")
+        coll = utils.get_collection_for_scene(context.scene, "lightsheets")
         for obj in lightsheets:
             coll.objects.link(obj)
 

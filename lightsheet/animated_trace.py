@@ -34,6 +34,8 @@ from time import process_time as stopwatch
 import bpy
 from bpy.types import Operator
 
+from lightsheet import utils
+
 
 class LIGHTSHEET_OT_animated_trace(Operator):
     """Trace, refine and finalize the selected caustics over several frames"""
@@ -204,10 +206,11 @@ def auto_trace(context, reference_caustics, frame):
         path_to_reference[path_key] = obj
 
     # remember old caustics
-    scene = context.scene
-    caustic_coll = scene.collection.children.get(f"Caustics in {scene.name}")
+    caustic_coll = utils.get_collection_for_scene(context.scene, "caustics",
+                                                  force=False)
     if caustic_coll is None:
-        msg = f"No collection named 'Caustics in {scene.name}' found"
+        # there should be caustics already, was the collection deleted?
+        msg = f"No collection named 'Caustics in {context.scene.name}' found"
         raise ValueError(msg)
     old_caustics = set(caustic_coll.objects)
 
@@ -263,7 +266,8 @@ def auto_trace(context, reference_caustics, frame):
         if 'CANCELLED' in ret:
             return None
 
-    # return remaining new caustics
+    # return remaining new caustics, but we shouldn't return new_caustics
+    # because finalize might have deleted some of those objects
     return [obj for obj in caustic_coll.objects if obj not in old_caustics]
 
 
