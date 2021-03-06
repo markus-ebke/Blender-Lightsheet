@@ -75,9 +75,9 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
     )
     fix_overlap: bpy.props.BoolProperty(
         name="Cycles: Fix Overlap Artifacts",
-        description="WARNING: SLOW AND CREATES LOTS OF GEOMETRY! Fix render "
+        description="WARNING: SLOW AND USES A LOT OF MEMORY! Fix render "
         "artifacts in Cycles caused by overlapping faces, will merge faces "
-        "into a single non-overlapping layer. NOTE: use the offset of the "
+        "into a single non-overlapping mesh. NOTE: use the offset of the "
         "shrinkwrap modifier to separate different caustics from each other",
         default=False
     )
@@ -232,20 +232,21 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
 
     # fix overlapping faces
     if fix_overlap:
+        num_faces = len(caustic_bm.faces)
+
         # sort faces into affine planes
-        prog.start_task("finding affine planes")
-        proper_planes, individual_faces = collect_by_plane(caustic_bm)
+        prog.start_task("finding affine planes", total_steps=num_faces)
+        proper_planes, individual_faces = collect_by_plane(caustic_bm, prog)
 
         # add individual faces from trivial planes
-        prog.start_task("merging faces", total_steps=len(caustic_bm.faces))
+        prog.start_task("merging faces", total_steps=num_faces)
         new_bm, vert_map = bmesh_duplicate_faces(caustic_bm, individual_faces)
-        prog.update_progress(step=prog.current_step+len(individual_faces))
+        prog.update_progress(step=len(individual_faces))
 
         # merge faces in affine planes and add to new bmesh
         for projector, faces in proper_planes:
             vert_map = merge_within_plane(caustic_bm, projector, faces,
-                                          new_bm, vert_map)
-            prog.update_progress(step=prog.current_step+len(faces))
+                                          new_bm, vert_map, prog)
 
         # replace old bmesh by new merged bmesh
         caustic_bm.free()
@@ -329,7 +330,7 @@ def remove_dim_faces(caustic_bm, light, emission_cutoff):
 
 
 # fix overlap: collection ----------------------------------------------------
-def collect_by_plane(bm, safe_distance=1e-4):
+def collect_by_plane(bm, prog, safe_distance=1e-4):
     """Group faces of bmesh if they live in the same plane."""
     # sort faces by obliqueness, because if the height is very small compared
     # to the base then a small error in position of the tip vertex can have a
@@ -409,6 +410,7 @@ def collect_by_plane(bm, safe_distance=1e-4):
                 sort_idx = bisect_right(normals_axis, face.normal[axis_idx])
                 order_axis.insert(sort_idx, len(affine_planes) - 1)
                 normals_axis.insert(sort_idx, face.normal[axis_idx])
+        prog.update_progress()
 
     # filter out trivial planes that contain only one face
     proper_planes, individual_faces = [], []
@@ -501,8 +503,13 @@ def bmesh_duplicate_faces(source_bm, faces):
     return new_bm, vert_map
 
 
-def merge_within_plane(bm, projector, faces, new_bm, vert_map):
+def merge_within_plane(bm, projector, faces, new_bm, vert_map, prog):
     """Merge faces that lie in the projector plane and add to new bmesh."""
+    # in this function progress from 0% to 100% means going from
+    # prog.current_step to prog.current_step + num_faces
+    current_step = prog.current_step
+    substeps = len(faces)
+
     # get caustic layers
     squeeze_layer = bm.loops.layers.uv["Caustic Squeeze"]
     color_layer = bm.loops.layers.color["Caustic Tint"]
@@ -545,10 +552,14 @@ def merge_within_plane(bm, projector, faces, new_bm, vert_map):
             face_indices.append((i1, i2, i3))
         else:
             face_indices.append((i1, i3, i2))
+    prog.update_progress(step=current_step+substeps*0.05)  # 5% done
 
-    # constrained delaunay triangulation
-    res = delaunay_2d_cdt(points, edge_indices, face_indices, 1, 1e-12)
-    new_points, _, new_faces, orig_verts, _, orig_faces = res
+    # constrained delaunay triangulation, note that this step uses a lot of
+    # memory because the returned lists will be very big
+    cdt_result = delaunay_2d_cdt(points, edge_indices, face_indices, 1, 1e-12)
+    new_points, _, new_faces, orig_verts, _, orig_faces = cdt_result
+    del _, cdt_result  # mark for garbage collection to clear memory
+    prog.update_progress(step=current_step+substeps*0.25)  # 25% done
 
     # rebuild vertices in new bmesh
     mat = projector.inverted()
@@ -570,6 +581,9 @@ def merge_within_plane(bm, projector, faces, new_bm, vert_map):
             vert = verts[orig_idx[0]]
             vert_map[vert] = new_vert
 
+    del new_points, orig_verts  # mark for garbage collection to clear memory
+    prog.update_progress(step=current_step+substeps*0.3)  # 30% done
+
     # get new caustic layers
     new_squeeze_layer = new_bm.loops.layers.uv["Caustic Squeeze"]
     new_color_layer = new_bm.loops.layers.color["Caustic Tint"]
@@ -577,11 +591,21 @@ def merge_within_plane(bm, projector, faces, new_bm, vert_map):
         new_uv_layer = utils.get_uv_map(new_bm)
         # assert new_uv_layer is not None
 
+    # the loop over new faces takes a long time, use a local progress counter
+    subcounter = prog.current_step  # local counter
+    subincr = substeps / len(new_faces) * 0.7  # loop uses ~70% of the time
+
     # rebuild faces in new bmesh and interpolate their caustic color
     linear_to_srgb = utils.linear_to_srgb
-    for vert_indices, orig_indices in zip(new_faces, orig_faces):
+    while new_faces:
+        # get indices for new face and indices of old face, but don't use
+        # zip(new_faces, orig_faces) because .pop() will help clear memory
+        vert_indices = new_faces.pop()
+        orig_indices = orig_faces.pop()
+
         # skip faces that fill holes, because they would be invisible anyway
         if not orig_indices:
+            subcounter += subincr  # always update counter
             continue
 
         # create face
@@ -620,6 +644,13 @@ def merge_within_plane(bm, projector, faces, new_bm, vert_map):
                 uv = barycentric_transform(loop.vert.co, *face_points[i],
                                            *face_uv[i])
                 loop[new_uv_layer].uv = uv.xy
+
+        # update progress counter
+        subcounter += subincr
+        prog.update_progress(step=subcounter)
+
+    # final state of progress counter
+    prog.update_progress(step=current_step+substeps)
 
     # return updated vert map, this is not strictly neccessary because dicts
     # are mutable, but "explicit is better than implicit"

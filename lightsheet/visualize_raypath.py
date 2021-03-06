@@ -98,7 +98,7 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
                 trails = gather_trails(obj, depsgraph)
                 path_obj = convert_trails_to_objects(trails, obj)
             toc = stopwatch()
-        except RuntimeError as err:
+        except ValueError as err:
             self.report({'ERROR'}, str(err))
             return {'CANCELLED'}
 
@@ -145,8 +145,8 @@ def gather_trails(caustic, depsgraph):
 
         # if raypath is invalid something is wrong and we should not continue
         if cdata is None:
-            msg = "Can't project existing caustic vertex (frame incorrect?)"
-            raise RuntimeError(msg)
+            msg = "Cannot reproject caustic vertex, undo changes and try again"
+            raise ValueError(msg)
 
         trails.append(trail)
 

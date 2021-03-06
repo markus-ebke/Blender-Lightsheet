@@ -253,13 +253,16 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
     caustic.cycles_visibility.scatter = False
     caustic.cycles_visibility.shadow = False
 
-    # add shrinkwrap modifier
+    # add shrinkwrap modifier and set offset so that caustics from the same
+    # lightsheet get stacked (to avoid overlap artifacts with Cycles),
+    # assuming that caustics of different lightsheets won't intersect
     mod = caustic.modifiers.new(name="Shrinkwrap", type='SHRINKWRAP')
     mod.wrap_method = 'TARGET_PROJECT'
     mod.wrap_mode = 'ABOVE_SURFACE'
     mod.target = caustic.parent
-    level = sum(1 for chd in caustic.parent.children if chd.caustic_info.path)
-    mod.offset = 1e-4 * (1 + level)  # use level to stack caustics
+    level = sum(1 for chd in caustic.parent.children
+                if chd.caustic_info.lightsheet == lightsheet)
+    mod.offset = 1e-4 * (1 + level)
 
     # fill out caustic_info property
     caustic.caustic_info.lightsheet = lightsheet

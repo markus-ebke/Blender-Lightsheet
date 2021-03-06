@@ -52,13 +52,13 @@ from lightsheet import material, utils
 # Global variables
 # -----------------------------------------------------------------------------
 # organize ray information
-Ray = namedtuple("Ray", ["origin", "direction", "tint", "chain"])
+Ray = namedtuple("Ray", ["origin", "direction", "color", "chain"])
 Ray.__doc__ = """Record ray information for tracing.
 
     We want to cast a ray from the ray origin (mathutils.Vector) in the given
-    direction (mathutils.Vector). Further we need the tint of the ray (3-tuple)
-    and a record of the chain of interaction along the already taken raypath
-    (a tuple of Link instances).
+    direction (mathutils.Vector). Additionally we need the color of the ray
+    (3-tuple of floats) and a record of the chain of interaction along the
+    already taken raypath (a tuple of Link instances).
     """
 
 # organize links in interaction chains
