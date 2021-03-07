@@ -329,5 +329,3 @@ def display_caustic_finalization(caustic_info, layout):
             cutoff = caustic_info.emission_cutoff
             layout.label(text=f"    Cutoff: {cutoff:.4f} W/m^2")
         layout.label(text=f"Fix overlap: {caustic_info.fix_overlap}")
-        layout.label(text="Delete lightsheet coords: "
-                          f"{caustic_info.delete_coordinates}")

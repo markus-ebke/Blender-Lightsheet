@@ -256,8 +256,7 @@ def auto_trace(context, reference_caustics, frame):
             "remove_dim_faces": settings_tuple[1],
             "emission_cutoff": settings_tuple[2],
             "delete_empty_caustics": True,
-            "fix_overlap": settings_tuple[3],
-            "delete_coordinates": settings_tuple[4],
+            "fix_overlap": settings_tuple[3]
         }
 
         override = context.copy()
@@ -328,7 +327,6 @@ def categorize_new_caustics(new_caustics, path_to_reference, frame):
                     caustic_info.remove_dim_faces,
                     caustic_info.emission_cutoff,
                     caustic_info.fix_overlap,
-                    caustic_info.delete_coordinates
                 )
                 finalization_to_caustics[settings_tuple].append(obj)
         else:

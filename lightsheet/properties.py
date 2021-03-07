@@ -86,6 +86,3 @@ class CausticInfo(bpy.types.PropertyGroup):
     remove_dim_faces: bpy.props.BoolProperty(name="Remove Dim Faces")
     emission_cutoff: bpy.props.FloatProperty(name="Emission Cutoff")
     fix_overlap: bpy.props.BoolProperty(name="Merge Overlapping Faces")
-    delete_coordinates: bpy.props.BoolProperty(
-        name="Delete Lightsheet Coordinates"
-    )

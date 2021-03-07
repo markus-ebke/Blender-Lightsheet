@@ -81,14 +81,6 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         "shrinkwrap modifier to separate different caustics from each other",
         default=False
     )
-    delete_coordinates: bpy.props.BoolProperty(
-        name="Delete Lightsheet Coordinates",
-        description="Delete the two UV-layers that hold lightsheet "
-        "coordinates, will save memory but could be used for other effects. "
-        "If overlapping faces are fixed, then these coordinates will always "
-        "be removed",
-        default=True
-    )
 
     @classmethod
     def poll(cls, context):
@@ -152,11 +144,6 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
 
         layout.prop(self, "fix_overlap")
 
-        # always remove coordinates if fix_overlap is enabled
-        sub = layout.column()
-        sub.active = not self.fix_overlap
-        sub.prop(self, "delete_coordinates")
-
     def execute(self, context):
         caustics = context.selected_objects
 
@@ -176,8 +163,7 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
             prog.start_job(caustic.name)
             result = finalize_caustic(
                 caustic, self.fade_boundary, emission_cutoff,
-                self.delete_empty_caustics, self.fix_overlap,
-                self.delete_coordinates, prog)
+                self.delete_empty_caustics, self.fix_overlap, prog)
             if result is None:
                 deleted += 1
             else:
@@ -200,7 +186,7 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
 # Functions used by finalize caustics operator
 # -----------------------------------------------------------------------------
 def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
-                     fix_overlap, delete_coordinates, prog):
+                     fix_overlap, prog):
     """Finalize caustic mesh."""
     # convert from object
     caustic_bm = bmesh.new()
@@ -208,7 +194,7 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
 
     # remove internal layers used for refining
     prog.start_task("deleting coordinates")
-    remove_layers(caustic_bm, delete_coordinates or fix_overlap)
+    remove_layers(caustic_bm)
 
     # fade out boundary
     if fade_boundary:
@@ -267,12 +253,11 @@ def finalize_caustic(caustic, fade_boundary, emission_cutoff, delete_empty,
     if emission_cutoff is not None:
         caustic_info.emission_cutoff = emission_cutoff
     caustic_info.fix_overlap = fix_overlap
-    caustic_info.delete_coordinates = delete_coordinates
 
     return caustic
 
 
-def remove_layers(caustic_bm, delete_coordinates):
+def remove_layers(caustic_bm):
     """Delete internal caustic vertex layers and uv-layers if wanted."""
     # face index vertex layer
     layer = caustic_bm.verts.layers.int.get("Face Index")
@@ -286,11 +271,10 @@ def remove_layers(caustic_bm, delete_coordinates):
             caustic_bm.verts.layers.float.remove(layer)
 
     # lightsheet coordinate uv-layer
-    if delete_coordinates:
-        for co in ["XY", "XZ"]:
-            layer = caustic_bm.loops.layers.uv.get(f"Lightsheet {co}")
-            if layer is not None:
-                caustic_bm.loops.layers.uv.remove(layer)
+    for co in ["XY", "XZ"]:
+        layer = caustic_bm.loops.layers.uv.get(f"Lightsheet {co}")
+        if layer is not None:
+            caustic_bm.loops.layers.uv.remove(layer)
 
 
 def remove_dim_faces(caustic_bm, light, emission_cutoff):
