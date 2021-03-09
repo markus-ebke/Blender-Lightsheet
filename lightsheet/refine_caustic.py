@@ -139,8 +139,12 @@ class LIGHTSHEET_OT_refine_caustics(Operator):
             for caustic in caustics:
                 num_verts_before += len(caustic.data.vertices)
                 prog.start_job(caustic.name)
-                refine_caustic(caustic, depsgraph, error_threshold,
-                               self.grow_boundary, prog)
+                try:
+                    refine_caustic(caustic, depsgraph, error_threshold,
+                                   self.grow_boundary, prog)
+                except ValueError as err:
+                    self.report({'ERROR'}, str(err))
+                    return {'CANCELLED'}
                 prog.stop_job()
                 num_verts_now += len(caustic.data.vertices)
             prog.end()
@@ -266,9 +270,9 @@ def refine_caustic(caustic, depsgraph, error_threshold, grow_boundary, prog):
             boundary_verts = grow_caustic_boundary(caustic_bm)
         else:
             # raise exception
-            msg = "cannot grow boundary, found verts with too many neighbours"
+            msg = "Cannot grow boundary, found verts with too many neighbours"
             info = "printed sheet coordinates of offending points to terminal"
-            raise RuntimeError(f"{msg}; {info}")
+            raise ValueError(f"{msg}; {info}")
     else:
         boundary_verts = []
     prog.update_progress()
@@ -655,6 +659,6 @@ def grow_caustic_boundary(caustic_bm):
                                         use_data=True)
     if len(ret['faces_fail']) > 0:
         msg = f"face_attribute_fill failed for {len(ret['faces_fail'])} faces"
-        raise RuntimeError(msg)
+        raise ValueError(msg)
 
     return outside_verts

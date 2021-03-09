@@ -115,6 +115,9 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
                 reasons = f"{light_type.lower()} lights are not supported"
                 return cancel(obj, reasons)
 
+        # deduce fix_overlap setting from active render engine
+        self.fix_overlap = context.scene.render.engine == 'CYLCES'
+
         # set properties via dialog window
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
@@ -143,6 +146,9 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
         sub.prop(self, "delete_empty_caustics")
 
         layout.prop(self, "fix_overlap")
+        if self.fix_overlap:
+            msg = "FIXING OVERLAPS IS SLOW AND USES LOTS OF RAM!"
+            layout.label(text=msg, icon='ERROR')
 
     def execute(self, context):
         caustics = context.selected_objects

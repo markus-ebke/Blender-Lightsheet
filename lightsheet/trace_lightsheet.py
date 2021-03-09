@@ -100,8 +100,12 @@ class LIGHTSHEET_OT_trace_lightsheets(Operator):
         with trace.configure_for_trace(context) as depsgraph:
             for lightsheet in lightsheets:
                 prog.start_job(lightsheet.name)
-                caustics = trace_lightsheet(lightsheet, depsgraph,
-                                            self.max_bounces, prog)
+                try:
+                    caustics = trace_lightsheet(lightsheet, depsgraph,
+                                                self.max_bounces, prog)
+                except ValueError as err:
+                    self.report({'ERROR'}, str(err))
+                    return {'CANCELLED'}
                 prog.stop_job()
                 all_caustics.extend(caustics)
             prog.end()

@@ -153,11 +153,18 @@ class LIGHTSHEET_OT_animated_trace(Operator):
                     obj.data.name = obj.name
             else:
                 # trace caustics for this frame
-                new_caustics = auto_trace(context, reference_caustics, frame)
+                try:
+                    new_caustics = auto_trace(context, reference_caustics,
+                                              frame)
+                except ValueError as err:
+                    self.report({'ERROR'}, str(err))
+                    return {'CANCELLED'}
             toc_frame = stopwatch()
 
             # check for errors
             if new_caustics is None:
+                # one of the lightsheet operators failed and already showed an
+                # error message via self.report
                 return {'CANCELLED'}
 
             # unhide the caustic only for this one frame
@@ -222,6 +229,7 @@ def auto_trace(context, reference_caustics, frame):
         override["selected_objects"] = [lightsheet]
         ret = bpy.ops.lightsheet.trace(override, max_bounces=max_bounces)
         if 'CANCELLED' in ret:
+            # note that trace operator uses self.report to show error
             return None
 
     # collect new caustics, categorize by refinement and finalization settings
@@ -247,6 +255,7 @@ def auto_trace(context, reference_caustics, frame):
             override["selected_objects"] = caustics
             ret = bpy.ops.lightsheet.refine(override, **settings)
             if 'CANCELLED' in ret:
+                # note that refine operator uses self.report to show error
                 return None
 
     # finalize new caustics
@@ -263,6 +272,7 @@ def auto_trace(context, reference_caustics, frame):
         override["selected_objects"] = caustics
         ret = bpy.ops.lightsheet.finalize(override, **settings)
         if 'CANCELLED' in ret:
+            # note that finalize operator uses self.report to show error
             return None
 
     # return remaining new caustics, but we shouldn't return new_caustics
