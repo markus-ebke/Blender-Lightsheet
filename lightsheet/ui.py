@@ -238,6 +238,9 @@ def display_mesh_info(data, layout):
 def display_materials_info(materials, layout):
     """Display lightsheet interactions with given materials."""
     layout.label(text=f"Materials Info: ({len(materials)} materials)")
+    if len(materials) == 0:
+        materials = [None]
+
     for mat in materials:
         mat_name = "<None>" if mat is None else mat.name
         layout.label(text=f"Material: {mat_name}", icon='MATERIAL')

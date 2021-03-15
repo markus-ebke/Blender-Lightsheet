@@ -147,9 +147,9 @@ class LIGHTSHEET_OT_animated_trace(Operator):
                 # add frame number to the name of the reference caustic
                 for obj in reference_caustics:
                     ref_name = obj.name
-                    if ref_name[-3:].isnumeric() and ref_name[-5:-3] == " f":
-                        ref_name = ref_name[:-5]
-                    obj.name = f"{ref_name} f{frame:0>3}"
+                    if ref_name[-4:].isnumeric() and ref_name[-6:-4] == " f":
+                        ref_name = ref_name[:-6]
+                    obj.name = f"{ref_name} f{frame:0>4}"
                     obj.data.name = obj.name
             else:
                 # trace caustics for this frame
@@ -296,9 +296,9 @@ def categorize_new_caustics(new_caustics, path_to_reference, frame):
 
             # add frame number to the name of the new caustic
             ref_name = ref_obj.name
-            if ref_name[-3:].isnumeric() and ref_name[-5:-3] == " f":
-                ref_name = ref_name[:-5]
-            obj.name = f"{ref_name} f{frame:0>3}"
+            if ref_name[-4:].isnumeric() and ref_name[-6:-4] == " f":
+                ref_name = ref_name[:-6]
+            obj.name = f"{ref_name} f{frame:0>4}"
             obj.data.name = obj.name
 
             # copy settings for shrinkwrap modifier (if any)

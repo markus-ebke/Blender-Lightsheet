@@ -264,8 +264,7 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
     mod.wrap_method = 'TARGET_PROJECT'
     mod.wrap_mode = 'ABOVE_SURFACE'
     mod.target = caustic.parent
-    level = sum(1 for chd in caustic.parent.children
-                if chd.caustic_info.lightsheet == lightsheet)
+    level = sum(1 for chd in caustic.parent.children if chd.caustic_info.path)
     mod.offset = 1e-4 * (1 + level)
 
     # fill out caustic_info property

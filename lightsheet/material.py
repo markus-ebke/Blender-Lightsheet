@@ -21,7 +21,7 @@
 """Handle materials for tracing lightsheets and setup of caustic node trees.
 
 The main function that handles materials for tracing is get_material_shader,
-it uses the setup_node_<...>-functions to process the active surface node.
+it uses the setup_<...>-functions to process the active surface node.
 
 A caustic material is created via get_caustic_material, it will add nodes for
 Cycles, EEVEE and add drivers for light strength and color.
@@ -117,23 +117,18 @@ def refract(ray_direction, normal, ior):
     return gamma * ray_direction + (gamma * cos_in - cos_out) * normal
 
 
-def invalid_surface_shader(ray_direction, normal):
-    # no caustics at all
-    return []
-
-
 def diffuse_surface_shader(ray_direction, normal):
     # caustic on object, but no tracing of further rays
     return [Interaction('DIFFUSE', None, None)]
 
 
 # setup surface interaction from BSDF node ------------------------------------
-def setup_node_diffuse(node):
+def setup_diffuse(node):
     # assert node.type == 'BSDF_DIFFUSE'
     return diffuse_surface_shader
 
 
-def setup_node_glossy(node):
+def setup_glossy(node):
     # assert node.type == 'BSDF_GLOSSY', node.type
 
     # don't handle reflection if roughness is nonzero
@@ -152,7 +147,7 @@ def setup_node_glossy(node):
     return surface_shader
 
 
-def setup_node_transparent(node):
+def setup_transparent(node):
     # assert node.type == 'BSDF_TRANSPARENT', node.type
 
     # node settings
@@ -165,7 +160,7 @@ def setup_node_transparent(node):
     return surface_shader
 
 
-def setup_node_refraction(node):
+def setup_refraction(node):
     # assert node.type == 'BSDF_REFRACTION', node.type
 
     # don't handle refraction if roughness is nonzero
@@ -187,7 +182,7 @@ def setup_node_refraction(node):
     return surface_shader
 
 
-def setup_node_glass(node):
+def setup_glass(node):
     # assert node.type == 'BSDF_GLASS', node.type
 
     # don't handle reflection or refraction for rough glass
@@ -220,7 +215,7 @@ def setup_node_glass(node):
     return surface_shader
 
 
-def setup_node_principled(node):
+def setup_principled(node):
     # assert node.type == 'BSDF_PRINCIPLED', node.type
 
     # node settings
@@ -319,21 +314,24 @@ def setup_scalar_node(node, from_socket_identifier=None):
                     return 1 - pow(dot, 2 * blend)
                 blend_clamped = max(blend, 1 - 1e-5)  # blend < 1
                 return 1 - pow(dot, 0.5 / (1 - blend_clamped))
-    else:  # none of the above
-        alternatives = "'FRESNEL' and 'LAYER_WEIGHT'"
-        msg = f"Node '{node.type}' is not supported, only {alternatives}"
-        raise ValueError(msg)
+    else:
+        # none of the above, will later raise ValueError
+        return None
 
     return fac
 
 
-def setup_node_mix(node):
+def setup_mix(node):
     # assert node.type == 'MIX_SHADER', node.type
 
     # mix factor
     if node.inputs[0].links:
         link = node.inputs[0].links[0]
         fac = setup_scalar_node(link.from_node, link.from_socket.identifier)
+        if fac is None:
+            supported = "only 'FRESNEL' and 'LAYER_WEIGHT'"
+            msg = f"Factor input of mix node is not supported, {supported}"
+            raise ValueError(msg)
     else:
         fac_value = node.inputs[0].default_value
 
@@ -344,20 +342,20 @@ def setup_node_mix(node):
     shader1 = None
     if node.inputs[1].links:
         node1 = node.inputs[1].links[0].from_node
-        setup = setup_node_interactions.get(node1.type)
+        setup = setup_shader_from_node.get(node1.type)
         if setup is not None:
             shader1 = setup(node1)
     if shader1 is None:
-        shader1 = invalid_surface_shader
+        raise ValueError("First shader input of Mix Shader node is invalid")
 
     shader2 = None
     if node.inputs[2].links:
         node2 = node.inputs[2].links[0].from_node
-        setup = setup_node_interactions.get(node2.type)
+        setup = setup_shader_from_node.get(node2.type)
         if setup is not None:
             shader2 = setup(node2)
     if shader2 is None:
-        shader2 = invalid_surface_shader
+        raise ValueError("Second shader input of Mix Shader node is invalid")
 
     def surface_shader(ray_direction, normal):
         # evaluate shader1
@@ -384,31 +382,121 @@ def setup_node_mix(node):
             vec1, col1 = interactions_map1.get(kind, (None, None))
             vec2, col2 = interactions_map2.get(kind, (None, None))
             if vec1 is not None:
-                vec = vec1
                 col = weight1 * col1
                 if vec2 is not None:
                     col += weight2 * col2
-                interactions.append(Interaction(kind, vec, col))
+                interactions.append(Interaction(kind, vec1, col))
+                # note: with two refraction shaders we might have the problem,
+                # that vec1 and vec2 point in different directions.
+                # In such a case we still follow vec1 and do not add another
+                # REFRACT interaction, because otherwise the caustics can't be
+                # uniquely identified by their raypath
             elif vec2 is not None:
-                vec = vec2
-                col = weight2 * col2
-                interactions.append(Interaction(kind, vec, col))
+                interactions.append(Interaction(kind, vec2, weight2*col2))
 
         return interactions
 
     return surface_shader
 
 
+# the add shader is similar to the mix shader, except that both weights are 1
+def setup_add(node):
+    # assert node.type == 'ADD_SHADER', node.type
+
+    # get the two connected shader nodes and setup shader functions
+    shader1 = None
+    if node.inputs[0].links:
+        node1 = node.inputs[0].links[0].from_node
+        setup = setup_shader_from_node.get(node1.type)
+        if setup is not None:
+            shader1 = setup(node1)
+
+        # default: diffuse
+        if shader1 is None:
+            shader1 = diffuse_surface_shader
+    else:
+        raise ValueError("First shader input of Add Shader node is invalid")
+
+    shader2 = None
+    if node.inputs[1].links:
+        node2 = node.inputs[1].links[0].from_node
+        setup = setup_shader_from_node.get(node2.type)
+        if setup is not None:
+            shader2 = setup(node2)
+
+        # default: diffuse
+        if shader2 is None:
+            shader2 = diffuse_surface_shader
+    else:
+        raise ValueError("Second shader input of Add Shader node is invalid")
+
+    def surface_shader(ray_direction, normal):
+        # evaluate shader1
+        interactions_map1 = dict()
+        for kind, vec, col in shader1(ray_direction, normal):
+            interactions_map1[kind] = (vec, col)
+
+        # evaluate shader1
+        interactions_map2 = dict()
+        for kind, vec, col in shader2(ray_direction, normal):
+            interactions_map2[kind] = (vec, col)
+
+        # build up interactions for added shader
+        interactions = []
+
+        # diffuse
+        if 'DIFFUSE' in interactions_map1 or 'DIFFUSE' in interactions_map2:
+            interactions.append(Interaction('DIFFUSE', None, None))
+
+        # all other interactions
+        for kind in ['REFLECT', 'REFRACT', 'TRANSPARENT']:
+            vec1, col1 = interactions_map1.get(kind, (None, None))
+            vec2, col2 = interactions_map2.get(kind, (None, None))
+            if vec1 is not None:
+                if vec2 is not None:
+                    col1 += col2
+                interactions.append(Interaction(kind, vec1, col))
+            elif vec2 is not None:
+                interactions.append(Interaction(kind, vec2, col2))
+
+        return interactions
+
+    return surface_shader
+
+
+def setup_shadow(node):
+    # assert node.type == 'HOLDOUT' or node.type == 'EMISSION', node.type
+
+    def nothing_surface_shader(ray_direction, normal):
+        # no caustics at all
+        return []
+
+    return nothing_surface_shader
+
+
 # mapping from node type to setup of surface interaction function
-setup_node_interactions = {
-    'BSDF_DIFFUSE': setup_node_diffuse,
-    'BSDF_GLOSSY': setup_node_glossy,
-    'BSDF_TRANSPARENT': setup_node_transparent,
-    'BSDF_REFRACTION': setup_node_refraction,
-    'BSDF_GLASS': setup_node_glass,
-    'BSDF_PRINCIPLED': setup_node_principled,
-    'MIX_SHADER': setup_node_mix,
+setup_shader_from_node = {
+    'BSDF_DIFFUSE': setup_diffuse,
+    'BSDF_GLOSSY': setup_glossy,
+    'BSDF_TRANSPARENT': setup_transparent,
+    'BSDF_REFRACTION': setup_refraction,
+    'BSDF_GLASS': setup_glass,
+    'BSDF_PRINCIPLED': setup_principled,
+    'MIX_SHADER': setup_mix,
+    'ADD_SHADER': setup_add,
+    # holdout and emission shader stop raypath, but don't show caustics
+    'HOLDOUT': setup_shadow,
+    'EMISSION': setup_shadow,
 }
+# surface shader nodes that will be treated as diffuse:
+#     BSDF_ANISOTROPIC
+#     BSDF_HAIR
+#     BSDF_HAIR_PRINCIPLED
+#     BSDF_TOON
+#     BSDF_TRANSLUCENT
+#     SUBSURFACE_SCATTERING
+#     BSDF_VELVET
+#     EEVEE_SPECULAR
 
 
 # main function to process materials ------------------------------------------
@@ -436,7 +524,7 @@ def get_material_shader(mat):
 
     if outnode is None:
         # no output node: invalid material
-        return (invalid_surface_shader, None)
+        raise ValueError(f"Material {mat.name} has no active output node")
 
     # find linked shader for volume, if any
     volume_params = None
@@ -456,20 +544,20 @@ def get_material_shader(mat):
     # find linked shader for surface (if none: invalid)
     surface_links = outnode.inputs['Surface'].links
     if not surface_links:
-        return (invalid_surface_shader, volume_params)
+        raise ValueError(f"Material {mat.name} has no active surface shader")
 
     # get node and setup shader for surface
     node = surface_links[0].from_node
-    setup = setup_node_interactions.get(node.type)
+    setup = setup_shader_from_node.get(node.type)
     if setup is None:
-        # node type not in dict, i.e. we don't know how to handle this node
-        return (invalid_surface_shader, volume_params)
+        # node type not in dict, assume it's a diffuse shader
+        return (diffuse_surface_shader, volume_params)
 
     # setup surface shader
     surface_shader = setup(node)
     if surface_shader is None:
-        # e.g. rough glass/glossy => no tracing, no diffuse caustic
-        return (invalid_surface_shader, None)
+        # can't process node e.g. rough glass/glossy, fall back to diffuse
+        return (diffuse_surface_shader, volume_params)
 
     # surface and volume setup complete
     return (surface_shader, volume_params)

@@ -116,7 +116,7 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
                 return cancel(obj, reasons)
 
         # deduce fix_overlap setting from active render engine
-        self.fix_overlap = context.scene.render.engine == 'CYLCES'
+        self.fix_overlap = context.scene.render.engine == 'CYCLES'
 
         # set properties via dialog window
         wm = context.window_manager
