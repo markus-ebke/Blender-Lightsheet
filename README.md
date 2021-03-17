@@ -25,10 +25,12 @@ EEVEE in 3D-View:
 
 Download the .zip file.
 In Blender's preferences window go to the Add-ons section and use the `Install...` button to install it.
-The lightsheet tools will be placed in a new panel in the 3D-View sidebar, progress for long running operators is printed to the terminal window.
+The operators will be placed in a new panel in the 3D-View sidebar, progress for long running operators is printed to the terminal window.
 There is a combination of settings where Blender 2.8 might crash! See [Drawbacks](#drawbacks).
 
 Example file: [Lightsheet Examples.blend](./examples/Lightsheet%20Examples.blend)
+
+Thread on blenderartists.org: https://blenderartists.org/t/lightsheet-caustics-for-cycles-and-eevee/1292193
 
 
 
@@ -44,7 +46,7 @@ It traces a ray for each vertex in the mesh, generating new vertices whenever a 
 These caustic vertices are connected by faces following the topology of the original sheet.
 The size of the new caustic face compared with the size of the original lightsheet face determines the caustic's brightness.
 
-This has been done before: [Rendering Realtime Caustics in WebGL](https://medium.com/@evanwallace/rendering-realtime-caustics-in-webgl-2a99a29a0b2c).
+This technique has been used before: [Rendering Realtime Caustics in WebGL](https://medium.com/@evanwallace/rendering-realtime-caustics-in-webgl-2a99a29a0b2c).
 
 
 
@@ -172,7 +174,7 @@ Then use the **Refine Caustics** operator with `Error Threshold` set to 0.0.
 
 
 
-## Contributing
+# Contributing
 
 Contributions are always welcome and greatly appreciated.
 Here is how you can help:
