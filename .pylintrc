@@ -1,5 +1,6 @@
 [MASTER]
 ignore=__init__.py
+persistent=no
 
 [MESSAGES CONTROL]
-disable=assignment-from-no-return,fixme,invalid-name
+disable=assignment-from-no-return,fixme,invalid-name,too-many-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-instance-attributes
