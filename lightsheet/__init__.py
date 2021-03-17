@@ -24,7 +24,7 @@
 bl_info = {
     "name": "Lightsheet",
     "author": "Markus Ebke",
-    "version": (0, 1),
+    "version": (1, 0),
     "blender": (2, 80, 0),
     "location": "View3D > Sidebar > Lightsheet Tab",
     "description": "Create fake caustics renderable in Cycles and EEVEE",
