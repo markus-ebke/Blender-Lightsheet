@@ -2,7 +2,7 @@
 #
 #  Lightsheet is a Blender addon for creating fake caustics that can be
 #  rendered with Cycles and EEVEE.
-#  Copyright (C) 2020  Markus Ebke
+#  Copyright (C) 2021  Markus Ebke
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
 """Handle materials for tracing lightsheets and setup of caustic node trees.
 
 The main function that handles materials for tracing is get_material_shader,
-it uses the setup_<...>-functions to process the active surface node.
+it uses the setup_<node>-functions to process the active surface node.
 
 A caustic material is created via get_caustic_material, it will add nodes for
 Cycles, EEVEE and add drivers for light strength and color.

@@ -2,7 +2,7 @@
 #
 #  Lightsheet is a Blender addon for creating fake caustics that can be
 #  rendered with Cycles and EEVEE.
-#  Copyright (C) 2020  Markus Ebke
+#  Copyright (C) 2021  Markus Ebke
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -20,11 +20,12 @@
 # ##### END GPL LICENSE BLOCK #####
 """Custom properties to keep track of caustic information.
 
-CausticInfo is a property for objects, if the path variable not empty then the
-object is a caustic. The entries of path are of type CausticPathLink and
+CausticInfo is a property for objects, if the path variable is not empty then
+the object is a caustic. The entries of path are of type CausticPathLink and
 specify the object that was hit and the kind of interaction. The target object
 is the last one in this path and the only entry with a diffuse interaction.
-Caustics that are finalized should not be refined anymore.
+Caustics that are finalized should not be refined anymore. Settings for
+refinement and finalization are shown by UI and used in animated_trace.py.
 """
 
 import bpy

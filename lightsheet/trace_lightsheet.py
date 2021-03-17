@@ -2,7 +2,7 @@
 #
 #  Lightsheet is a Blender addon for creating fake caustics that can be
 #  rendered with Cycles and EEVEE.
-#  Copyright (C) 2020  Markus Ebke
+#  Copyright (C) 2021  Markus Ebke
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@
 LIGHTSHEET_OT_trace_lighsheet: Operator for tracing lightsheet
 
 Helper functions:
-- verify_object_is_lighsheet
+- verify_lighsheet
 - trace_lightsheet
 - convert_caustics_to_object
 - setup_caustic_bmesh
