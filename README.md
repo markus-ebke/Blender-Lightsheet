@@ -103,7 +103,15 @@ And if you render with Cycles, you should disable reflective and refractive caus
     After tracing has finished there should be several new objects in the scene that are part the the caustic collection (see the outliner for the complete list).
     Delete any caustics that you don't want (or that are too dim).
 
-3. **Refine caustics for more detail**
+3. **For EEVEE: Adjust caustic material**
+
+	![Screenshot of caustic textures nodes](./examples/caustic_texture_nodes.png)
+
+	If you want to render with EEVEE, you need to adjust the texture of the caustic material.
+	Copy the diffuse texture from the parent object and connect it instead of the checkerboard node marked in red.
+	If the parent object has no texture, disconnect the node and set the diffuse color in the Mix RGB node.
+
+4. **Refine caustics for more detail**
 
     ![Screenshot of Refine Caustics operator panel](./examples/operator_refine.png)
 
@@ -112,7 +120,7 @@ And if you render with Cycles, you should disable reflective and refractive caus
     You can repeat this step a few times, increasing the error threshold in each iteration.
     (Note that, to avoid testing all edges every time the operator is used, only edges that are *Marked as Seam* will the tested.)
 
-4. **Cleanup and finalize caustics**
+5. **Cleanup and finalize caustics**
 
     ![Screenshot of Finalize Caustics operator panel](./examples/operator_finalize.png)
 
@@ -122,7 +130,7 @@ And if you render with Cycles, you should disable reflective and refractive caus
     Note that this will usually take a long time and use a lot of memory.
     (You can delete faces, e.g. those that are not visible to the camera, to speed up this process and save memory.)
 
-5. **Optional: animation**
+6. **Optional: Animation**
 
     ![Screenshot of Animated Trace operator panel](./examples/operator_animate.png)
 
