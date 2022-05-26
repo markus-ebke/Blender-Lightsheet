@@ -289,11 +289,20 @@ def convert_bmesh_to_lightsheet(bm, light):
     # adjust drawing and visibility
     lightsheet.display_type = 'WIRE'
     lightsheet.hide_render = True
-    lightsheet.cycles_visibility.camera = False
-    lightsheet.cycles_visibility.diffuse = False
-    lightsheet.cycles_visibility.glossy = False
-    lightsheet.cycles_visibility.transmission = False
-    lightsheet.cycles_visibility.scatter = False
-    lightsheet.cycles_visibility.shadow = False
+    if bpy.app.version < (3, 0, 0):
+        lightsheet.cycles_visibility.camera = False
+        lightsheet.cycles_visibility.diffuse = False
+        lightsheet.cycles_visibility.glossy = False
+        lightsheet.cycles_visibility.transmission = False
+        lightsheet.cycles_visibility.scatter = False
+        lightsheet.cycles_visibility.shadow = False
+    else:
+        # API change: https://developer.blender.org/rBca64bd0aacdaa
+        lightsheet.visible_camera = False
+        lightsheet.visible_diffuse = False
+        lightsheet.visible_glossy = False
+        lightsheet.visible_transmission = False
+        lightsheet.visible_volume_scatter = False
+        lightsheet.visible_shadow = False
 
     return lightsheet

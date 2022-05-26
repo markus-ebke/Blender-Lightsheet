@@ -250,12 +250,21 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
     caustic.data.materials.append(mat)
 
     # for Cycles we need to make the caustic visible to diffuse rays only
-    caustic.cycles_visibility.camera = False
-    caustic.cycles_visibility.diffuse = True
-    caustic.cycles_visibility.glossy = False
-    caustic.cycles_visibility.transmission = False
-    caustic.cycles_visibility.scatter = False
-    caustic.cycles_visibility.shadow = False
+    if bpy.app.version < (3, 0, 0):
+        caustic.cycles_visibility.camera = False
+        caustic.cycles_visibility.diffuse = True
+        caustic.cycles_visibility.glossy = False
+        caustic.cycles_visibility.transmission = False
+        caustic.cycles_visibility.scatter = False
+        caustic.cycles_visibility.shadow = False
+    else:
+        # API change: https://developer.blender.org/rBca64bd0aacdaa
+        caustic.visible_camera = False
+        caustic.visible_diffuse = True
+        caustic.visible_glossy = False
+        caustic.visible_transmission = False
+        caustic.visible_volume_scatter = False
+        caustic.visible_shadow = False
 
     # add shrinkwrap modifier and set offset so that caustics from the same
     # lightsheet get stacked (to avoid overlap artifacts with Cycles),
