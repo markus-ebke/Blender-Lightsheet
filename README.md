@@ -21,7 +21,7 @@ EEVEE in 3D-View:
 
 ## Installation
 
-**Dowload link** (for Blender 2.83 and 2.9): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
+**Dowload link** (for Blender 2.83, 2.9 and 3.1): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
 
 Download the .zip file.
 In Blender's preferences window go to the Add-ons section and use the `Install...` button to install it.
