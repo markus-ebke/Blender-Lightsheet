@@ -397,7 +397,7 @@ def calc_normal(obj, depsgraph, face_index, point):
     mesh = get_eval_mesh(obj, depsgraph)
     face = mesh.polygons[face_index]
 
-    # # do we have to smooth the normals? if no then flat shading
+    # do we have to smooth the normals? if no then flat shading
     if not face.use_smooth:
         return face.normal
 

@@ -29,7 +29,7 @@ bl_info = {
     "location": "View3D > Sidebar > Lightsheet Tab",
     "description": "Create fake caustics renderable in Cycles and EEVEE",
     "warning": "",
-    "doc_url": "",
+    "doc_url": "https://blenderartists.org/t/lightsheet-caustics-for-cycles-and-eevee/1292193",
     "tracker_url": "https://github.com/markus-ebke/Blender-Lightsheet/issues",
     "category": "Lighting",
 }
