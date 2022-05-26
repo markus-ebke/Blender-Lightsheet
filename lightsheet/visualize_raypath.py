@@ -46,8 +46,9 @@ class LIGHTSHEET_OT_visualize_raypath(Operator):
 
     @classmethod
     def poll(cls, context):
-        # operator makes sense only for caustics
-        return context.object is not None and context.object.caustic_info.path
+        # operator makes sense only for unfinalized caustics
+        return (context.object is not None and context.object.caustic_info.path
+                and not context.object.caustic_info.finalized)
 
     def invoke(self, context, event):
         obj = context.object
