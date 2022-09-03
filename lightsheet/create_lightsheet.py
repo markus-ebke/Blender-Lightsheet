@@ -23,7 +23,7 @@
 LIGHTSHEET_OT_create_lightsheet: Blender operator to create lightsheet
 
 Helper functions:
-- setup_ligthsheet
+- setup_lightsheet
 - create_bmesh_square
 - create_bmesh_disk
 - create_bmesh_sphere

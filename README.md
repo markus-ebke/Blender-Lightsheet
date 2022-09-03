@@ -21,7 +21,7 @@ EEVEE in 3D-View:
 
 ## Installation
 
-**Dowload link** (for Blender 2.83, 2.9 and 3.1): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
+**Download link** (for Blender 2.83, 2.9 and 3.1): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
 
 Download the .zip file.
 In Blender's preferences window go to the Add-ons section and use the `Install...` button to install it.
@@ -168,7 +168,7 @@ Then use the **Refine Caustics** operator with `Error Threshold` set to 0.0.
 
     ![BlenderDiplom Glass scene with Lightsheet caustics](./examples/blenderdiplom_glass.jpg)
 
-- With Cycles the caustics are visible when seen in a mirror or through water;
+- With Cycles the caustics are visible when seen in a mirror or through water:
 
     ![Pool scene with camera above water](./examples/pool_above.jpg)
 
@@ -223,7 +223,7 @@ For development I suggest you follow these steps:
     - When saving Blender files use the `Compress File` option, also don't include the computed caustics as they make the files very big.
     - For images I noticed that the JPEG-option with quality 98% gives good results and smaller files than PNG.
     - For animations I used GIF because I failed embedding looping MP4 videos in this README.
-    I created them with [ImageMagick](https://imagemagick.org) (and I had to change some the settings in ImageMagick's [policy.xml](https://imagemagick.org/script/resources.php) to get it working):
+    I created them with [ImageMagick](https://imagemagick.org) (and I had to change some of the settings in ImageMagick's [policy.xml](https://imagemagick.org/script/resources.php) to get it working):
         ```shell
         $ convert -fuzz 5% -delay 4 -loop 0 render/*.png -scale 640x360 -layers OptimizePlus -layers OptimizeTransparency animation640x360.gif
         ```
