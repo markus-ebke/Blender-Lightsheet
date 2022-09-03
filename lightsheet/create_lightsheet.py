@@ -199,7 +199,11 @@ def create_bmesh_sphere(resolution, radius=1.0):
     """Create a spherical bmesh based on a subdivided icosahedron."""
     # use icosahedron as template
     bm_template = bmesh.new()
-    bmesh.ops.create_icosphere(bm_template, subdivisions=0, diameter=1.0)
+    if bpy.app.version < (3, 0, 0):
+        bmesh.ops.create_icosphere(bm_template, subdivisions=0, diameter=1.0)
+    else:
+        # API change: https://developer.blender.org/rB9b2b32a3338d
+        bmesh.ops.create_icosphere(bm_template, subdivisions=0, radius=1.0)
 
     # we will generate points with coordinates (i, j, 0), where i, j are
     # integers with i >= 0, j >= 0, i + j <= resolution - 1
