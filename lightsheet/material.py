@@ -222,9 +222,13 @@ def setup_principled(node):
     color_srgb = node.inputs['Base Color'].default_value[:3]
     color = Color(utils.srgb_to_linear(color_srgb))
     metallic = node.inputs['Metallic'].default_value
-    specular = node.inputs['Specular'].default_value
+    if bpy.app.version < (4, 0, 0):
+        specular = node.inputs['Specular'].default_value
+        transmission = node.inputs['Transmission'].default_value
+    else:
+        specular = node.inputs['Specular IOR Level'].default_value
+        transmission = node.inputs['Transmission Weight'].default_value
     ior = node.inputs['IOR'].default_value
-    transmission = node.inputs['Transmission'].default_value
 
     # convert specular to ior for fresnel i.e. invert
     # specular = ((ior - 1) / (ior + 1))**2 / 0.08
@@ -244,7 +248,10 @@ def setup_principled(node):
         return None  # no diffuse => no caustic or caustic tracing at all
 
     # don't handle refraction if it has roughness
-    extra_roughness = node.inputs['Transmission Roughness'].default_value
+    if bpy.app.version < (4, 0, 0):
+        extra_roughness = node.inputs['Transmission Roughness'].default_value
+    else:
+        extra_roughness = roughness
     handle_refraction = extra_roughness == 0 or node.distribution == 'SHARP'
 
     white = Color((1.0, 1.0, 1.0))
