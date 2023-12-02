@@ -154,7 +154,7 @@ Then use the **Refine Caustics** operator with `Error Threshold` set to 0.0.
     The coordinates of this point are accessible from the caustic via two UV-layers.
     Since they are not necessary for the look of the caustic, they will be delete by the finalize operator.
     But these coordinates could be used to project an image onto a diffuse object, when the light shines through a lens or hits a mirror or similar.
-    (This is also solves the question at https://blender.stackexchange.com/q/90698.)
+    (This also solves the question at https://blender.stackexchange.com/q/90698.)
     Here is the Blender logo projected onto a deformed golden mirror and a block of glass:
 
     ![Distorted projection of Blender logo](./examples/distorted_projection.jpg)
@@ -246,6 +246,12 @@ For development I suggest you follow these steps:
 
 
 ## Changelog
+
+**v1.2 (2022-09-03)**
+- Fix issue #1, correct some typos
+
+**v1.1 (2022-05-26)**
+- Update for Blender 3.1
 
 **v1.0 (2021-03-17)**
 - First public release
