@@ -225,9 +225,15 @@ def auto_trace(context, reference_caustics, frame):
     for lightsheet, path_keys in lightsheet_to_paths.items():
         max_bounces = max(len(path_key) - 2 for path_key in path_keys)
 
-        override = context.copy()
-        override["selected_objects"] = [lightsheet]
-        ret = bpy.ops.lightsheet.trace(override, max_bounces=max_bounces)
+        if bpy.app.version < (3, 2, 0):
+            override = context.copy()
+            override["selected_objects"] = [lightsheet]
+            ret = bpy.ops.lightsheet.trace(override, max_bounces=max_bounces)
+        else:
+            # API change, see Release_Notes/3.2/Python_API#Deprecation
+            with context.temp_override(selected_objects=[lightsheet]):
+                ret = bpy.ops.lightsheet.trace(max_bounces=max_bounces)
+
         if 'CANCELLED' in ret:
             # note that trace operator uses self.report to show error
             return None
@@ -251,9 +257,15 @@ def auto_trace(context, reference_caustics, frame):
                 "grow_boundary": step[2]
             }
 
-            override = context.copy()
-            override["selected_objects"] = caustics
-            ret = bpy.ops.lightsheet.refine(override, **settings)
+            if bpy.app.version < (3, 2, 0):
+                override = context.copy()
+                override["selected_objects"] = caustics
+                ret = bpy.ops.lightsheet.refine(override, **settings)
+            else:
+                # API change, see Release_Notes/3.2/Python_API#Deprecation
+                with context.temp_override(selected_objects=caustics):
+                    ret = bpy.ops.lightsheet.refine(**settings)
+
             if 'CANCELLED' in ret:
                 # note that refine operator uses self.report to show error
                 return None
@@ -268,9 +280,15 @@ def auto_trace(context, reference_caustics, frame):
             "fix_overlap": settings_tuple[3]
         }
 
-        override = context.copy()
-        override["selected_objects"] = caustics
-        ret = bpy.ops.lightsheet.finalize(override, **settings)
+        if bpy.app.version < (3, 2, 0):
+            override = context.copy()
+            override["selected_objects"] = caustics
+            ret = bpy.ops.lightsheet.finalize(override, **settings)
+        else:
+            # API change, see Release_Notes/3.2/Python_API#Deprecation
+            with context.temp_override(selected_objects=caustics):
+                ret = bpy.ops.lightsheet.finalize(**settings)
+
         if 'CANCELLED' in ret:
             # note that finalize operator uses self.report to show error
             return None
