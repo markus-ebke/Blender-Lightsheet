@@ -334,7 +334,7 @@ def collect_by_plane(bm, prog, safe_distance=1e-4):
 
     # affine plane = (projection matrix, list of faces), the projection matrix
     # maps points in global space to (u, v, w) where (u, v) are local
-    # coordinates in the plane and z is the distance to the plane
+    # coordinates in the plane and w is the distance to the plane
     affine_planes = []
 
     # record which faces were collected into which planes and try these planes
@@ -376,7 +376,7 @@ def collect_by_plane(bm, prog, safe_distance=1e-4):
         for plane_index in plane_indices(face):
             projector, faces = affine_planes[plane_index]
             for vert in face.verts:
-                # project vert and check if lies within the plane
+                # project vert and check if it lies within the plane
                 point = projector @ vert.co
                 if abs(point.z) > safe_distance:
                     # point is too far away from affine plane, break innermost

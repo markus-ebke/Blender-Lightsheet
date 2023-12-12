@@ -365,7 +365,7 @@ def scene_raycast(ray_origin, ray_direction, depsgraph, obj=None):
             origin=ray_origin,
             direction=ray_direction)
     else:
-        # API change: https://developer.blender.org/rBA82ed41ec6324
+        # API change: https://developer.blender.org/rBe03d53874dac5f
         result = depsgraph.scene.ray_cast(
             depsgraph=depsgraph,
             origin=ray_origin,
@@ -376,15 +376,22 @@ def scene_raycast(ray_origin, ray_direction, depsgraph, obj=None):
     if not success or (obj is not None and hit_obj is not obj):
         return None, None, None, None, None, None
 
+    # refine hit location
+    point = matrix.inverted() @ location
+    closest_result = hit_obj.closest_point_on_mesh(point, depsgraph=depsgraph)
+    (success, point, face_normal, face_index) = closest_result
+    # assert success, (result, closest_result)
+
     # calculate smoothed normal (!= true normal if material uses bump mapping)
     # note that normals transform differently than position vectors because
     # scaling can mess up the perpendicularness of the normal, explanation:
     # https://computergraphics.stackexchange.com/q/1502
-    normal_local = calc_normal(hit_obj, depsgraph, face_index,
-                               point=matrix.inverted() @ location)
-    smooth_normal = matrix.inverted().transposed().to_3x3() @ normal_local
-    smooth_normal.normalize()
+    fn_local, sn_local = calc_normal(hit_obj, depsgraph, face_index, point)
+    mat_local_to_global = matrix.inverted().transposed().to_3x3()
+    face_normal = (mat_local_to_global @ fn_local).normalized()
+    smooth_normal = (mat_local_to_global @ sn_local).normalized()
 
+    location = matrix @ point
     return hit_obj, location, smooth_normal, face_normal, face_index, matrix
 
 
@@ -392,14 +399,14 @@ def scene_raycast(ray_origin, ray_direction, depsgraph, obj=None):
 # Helper functions
 # -----------------------------------------------------------------------------
 def calc_normal(obj, depsgraph, face_index, point):
-    """Calculate (smooth) normal vector and uv coordinates for given point"""
+    """Calculate face and smooth normal vector for given point"""
     # get the face that we hit
     mesh = get_eval_mesh(obj, depsgraph)
     face = mesh.polygons[face_index]
 
     # do we have to smooth the normals? if no then flat shading
     if not face.use_smooth:
-        return face.normal
+        return (face.normal, face.normal)
 
     # coordinates, normals and uv for the vertices of the face
     vert_co, vert_normal = [], []
@@ -422,14 +429,15 @@ def calc_normal(obj, depsgraph, face_index, point):
     # note that the interpolated vector is (in general) not normalized, but
     # probably close to length 1 (if normals at vertices don't differ too much)
     n1, n2, n3 = vert_normal[tri[0]], vert_normal[tri[1]], vert_normal[tri[2]]
-    normal = barycentric_transform(point, v1, v2, v3, n1, n2, n3)
+    smooth_normal = barycentric_transform(point, v1, v2, v3, n1, n2, n3)
 
-    # return normal.normalized()
-    return normal  # normalized not needed if we transform and normalize later
+    # normalized not needed if we transform and normalize later
+    # return (face.normal, normal.normalized())
+    return (face.normal, smooth_normal)
 
 
 def calc_uv(obj, depsgraph, face_index, point):
-    """Calculate (smooth) normal vector and uv coordinates for given point"""
+    """Calculate uv coordinates for given point"""
     # get the face that we hit
     mesh = get_eval_mesh(obj, depsgraph)
 
