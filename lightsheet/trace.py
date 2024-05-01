@@ -480,7 +480,8 @@ def get_eval_mesh(obj, depsgraph):
     # get mesh of object
     obj_eval = obj.evaluated_get(depsgraph)
     mesh = obj_eval.to_mesh()
-    mesh.calc_normals_split()  # for loop normals
+    if bpy.app.version < (4, 1, 0):
+        mesh.calc_normals_split()  # for loop normals
 
     # record object for clearing later
     meshed_objects.add(obj)

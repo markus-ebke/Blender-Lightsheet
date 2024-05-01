@@ -37,6 +37,7 @@ Helper functions:
 
 import textwrap
 
+import bpy
 from bpy.types import Panel
 from mathutils import Vector
 
@@ -59,7 +60,12 @@ class LIGHTSHEET_PT_tools(Panel):
         col.scale_y = 1.5
 
         # here come the important operators
-        col.operator("lightsheet.create", icon='LIGHTPROBE_PLANAR')
+        col.operator(
+            "lightsheet.create",
+            icon="LIGHTPROBE_PLANAR"
+            if bpy.app.version < (4, 1, 0)
+            else "LIGHTPROBE_PLANE",
+        )
         col.operator("lightsheet.trace", icon='HIDE_OFF')
         col.operator("lightsheet.refine", icon='MOD_MULTIRES')
         col.operator("lightsheet.finalize", icon='OUTPUT')
@@ -196,8 +202,11 @@ def display_object_info(obj, lightsheet_collection, layout):
     if obj.type == 'LIGHT':
         # object is light, does it have a lightsheet?
         lightsheets = [child for child in obj.children if is_lighsheet(child)]
-        layout.label(text=f"Light has {len(lightsheets)} lightsheets:",
-                     icon='LIGHTPROBE_PLANAR')
+        layout.label(
+            text=f"Light has {len(lightsheets)} lightsheets:",
+            icon="LIGHTPROBE_PLANAR"
+            if bpy.app.version < (4, 1, 0)
+            else "LIGHTPROBE_PLANE")
         for ls in lightsheets:
             layout.label(text=f"    {ls.name}")
     elif obj.type == 'MESH':
@@ -213,8 +222,12 @@ def display_object_info(obj, lightsheet_collection, layout):
         elif obj.parent is not None and obj.parent.type == 'LIGHT':
             # object is or can be lightsheet
             verb = "is" if is_lighsheet(obj) else "can be"
-            layout.label(text=f"Object {verb} lightsheet of {obj.parent.name}",
-                         icon='LIGHTPROBE_PLANAR')
+            layout.label(
+                text=f"Object {verb} lightsheet of {obj.parent.name}",
+                icon="LIGHTPROBE_PLANAR"
+                if bpy.app.version < (4, 1, 0)
+                else "LIGHTPROBE_PLANE",
+            )
         else:
             caustics = [child for child in obj.children if is_caustic(child)]
             if caustics:
