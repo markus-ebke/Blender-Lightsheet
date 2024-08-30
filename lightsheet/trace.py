@@ -46,7 +46,7 @@ from mathutils import Vector
 from mathutils.geometry import (barycentric_transform, intersect_point_tri,
                                 tessellate_polygon)
 
-from lightsheet import material, utils
+from . import material, utils
 
 # -----------------------------------------------------------------------------
 # Global variables

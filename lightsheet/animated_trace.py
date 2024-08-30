@@ -34,7 +34,7 @@ from time import process_time as stopwatch
 import bpy
 from bpy.types import Operator
 
-from lightsheet import utils
+from . import utils
 
 
 class LIGHTSHEET_OT_animated_trace(Operator):

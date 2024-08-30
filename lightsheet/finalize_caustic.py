@@ -43,7 +43,7 @@ from bpy.types import Operator
 from mathutils import Matrix, Vector
 from mathutils.geometry import barycentric_transform, delaunay_2d_cdt
 
-from lightsheet import utils
+from . import utils
 
 
 class LIGHTSHEET_OT_finalize_caustics(Operator):

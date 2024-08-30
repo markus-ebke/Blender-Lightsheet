@@ -37,7 +37,7 @@ from math import sqrt
 import bpy
 from mathutils import Color
 
-from lightsheet import utils
+from . import utils
 
 # -----------------------------------------------------------------------------
 # Global variables

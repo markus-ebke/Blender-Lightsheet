@@ -39,7 +39,7 @@ from bpy.types import Operator
 from mathutils import Vector
 from mathutils.geometry import barycentric_transform
 
-from lightsheet import utils
+from . import utils
 
 
 class LIGHTSHEET_OT_create_lightsheets(Operator):

@@ -38,7 +38,7 @@ import bmesh
 import bpy
 from bpy.types import Operator
 
-from lightsheet import material, trace, utils
+from . import material, trace, utils
 
 
 class LIGHTSHEET_OT_trace_lightsheets(Operator):

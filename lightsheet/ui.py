@@ -41,7 +41,7 @@ import bpy
 from bpy.types import Panel
 from mathutils import Vector
 
-from lightsheet import material, utils
+from . import material, utils
 
 
 class LIGHTSHEET_PT_tools(Panel):

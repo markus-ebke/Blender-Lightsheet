@@ -21,19 +21,8 @@
 
 # <pep8 compliant>
 
-bl_info = {
-    "name": "Lightsheet",
-    "author": "Markus Ebke",
-    "version": (1, 4),
-    "blender": (3, 2, 0),
-    "location": "View3D > Sidebar > Lightsheet Tab",
-    "description": "Create fake caustics renderable in Cycles and EEVEE",
-    "warning": "",
-    "doc_url": "https://blenderartists.org/t/lightsheet-caustics-for-cycles-and-eevee/1292193",
-    "tracker_url": "https://github.com/markus-ebke/Blender-Lightsheet/issues",
-    "category": "Lighting",
-}
 
+"""
 # support reloading scripts and addons
 if "bpy" in locals():
     import importlib
@@ -47,21 +36,21 @@ if "bpy" in locals():
     importlib.reload(properties)
     importlib.reload(ui)
 
-    print("Lighsheet: Addon reloaded")
-else:
-    from lightsheet import (create_lightsheet,
-                            trace_lightsheet,
-                            refine_caustic,
-                            finalize_caustic,
-                            visualize_raypath,
-                            animated_trace,
-                            properties,
-                            ui)
-
-    print("Lightsheet: Addon loaded")
+    # print("Lighsheet: Addon reloaded")
+"""
 
 import bpy
 from bpy.utils import register_class, unregister_class
+
+from . import (create_lightsheet,
+               trace_lightsheet,
+               refine_caustic,
+               finalize_caustic,
+               visualize_raypath,
+               animated_trace,
+               properties,
+               ui)
+# print("Lightsheet: Addon loaded")
 
 
 # registration
@@ -89,7 +78,7 @@ def register():
     bpy.types.Object.caustic_info = bpy.props.PointerProperty(
         type=properties.CausticInfo)
 
-    print("Lightsheet: Addon registered")
+    # print("Lightsheet: Addon registered")
 
 
 def unregister():
@@ -98,7 +87,7 @@ def unregister():
     for cls in reversed(classes):
         unregister_class(cls)
 
-    print("Lightsheet: Addon unregistered")
+    # print("Lightsheet: Addon unregistered")
 
 
 if __name__ == "__main__":

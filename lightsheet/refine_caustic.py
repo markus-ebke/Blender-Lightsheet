@@ -34,7 +34,7 @@ import bmesh
 import bpy
 from bpy.types import Operator
 
-from lightsheet import trace, utils
+from . import trace, utils
 
 
 class LIGHTSHEET_OT_refine_caustics(Operator):
