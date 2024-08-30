@@ -259,7 +259,7 @@ def convert_caustic_to_object(lightsheet, chain, sheet_to_data):
         caustic.cycles_visibility.shadow = False
     else:
         # API change: https://developer.blender.org/rBca64bd0aacdaa
-        caustic.visible_camera = False
+        caustic.visible_camera = bpy.context.scene.render.engine != 'CYCLES'
         caustic.visible_diffuse = True
         caustic.visible_glossy = False
         caustic.visible_transmission = False
