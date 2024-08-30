@@ -21,12 +21,14 @@ EEVEE in 3D-View:
 
 ## Installation
 
-**Download link** (for Blender 3.2, 3.6 and 4.1): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
+**Download link** (for Blender 3.2, 3.6 and 4.2): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
 
 Download the .zip file.
-In Blender's preferences window go to the Add-ons section and use the `Install...` button to install it.
-The operators will be placed in a new panel in the 3D-View sidebar, progress for long running operators is printed to the terminal window.
-There is a combination of settings where Blender 2.8 might crash! See [Drawbacks](#drawbacks).
+In Blender's preferences window go to the Add-ons section, click the dropdown menu in the topright corner and select `Install from Disk...`.
+Navigate to the downloaded file and install it.
+
+You can access the Lightsheet tools via a panel in the 3D-View sidebar.
+Also, progress for long running operators is printed to the terminal window.
 
 Example file: [Lightsheet Examples.blend](./examples/Lightsheet%20Examples.blend)
 
@@ -68,8 +70,7 @@ EEVEE:
 
 Cycles:
 - There will be render artifacts where the caustic is folded on top of itself.
-    I included a setting to mitigate this, but it takes a long time, uses a lot of memory and creates large files.
-    Also this setting might crash Blender 2.83, because there seems to be a bug in `mathutils.geometry.delaunay_2d_cdt` (bug is fixed for Blender 2.9 and above).
+    The `Finalize Caustics` operator includes a setting to mitigate this, but it takes a long time, uses a lot of memory and creates large files.
 
 If one of these points is a problem for you, just use [LuxCoreRender](https://luxcorerender.org) or [YafaRay](https://github.com/YafaRay) or [appleseed](https://appleseedhq.net)!
 
@@ -246,6 +247,11 @@ For development I suggest you follow these steps:
 
 
 ## Changelog
+
+**v1.4.1 (2024-08-30)**
+- Fix that caustics would not be visible in EEVEE
+- Convert to a Blender extension
+- Test with Blender 4.2
 
 **v1.4 (2024-05-01)**
 - Update for Blender 4.1
