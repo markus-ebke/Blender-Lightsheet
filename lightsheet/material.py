@@ -232,8 +232,8 @@ def setup_principled(node):
 
     # convert specular to ior for fresnel i.e. invert
     # specular = ((ior - 1) / (ior + 1))**2 / 0.08
-    temp = sqrt(specular*0.08)
-    specular_ior = (1 + temp) / (1 - temp)
+    x = sqrt(specular * 0.08)
+    specular_ior = (1 + x) / (1 - x)
 
     # have diffuse caustic if material is not a perfect mirror or glass
     handle_diffuse = metallic < 1 and transmission < 1
@@ -290,6 +290,53 @@ def setup_principled(node):
             # some light is transmitted
             refra = refract(ray_direction, normal, ior)
             interactions.append(Interaction('REFRACT', refra, refra_tint))
+
+        return interactions
+
+    return surface_shader
+
+
+def setup_metallic(node):
+    # assert node.type == 'BSDF_METALLIC', node.type
+
+    # node settings
+    color_srgb = node.inputs['Base Color'].default_value[:3]
+    color = Color(utils.srgb_to_linear(color_srgb))
+
+    # TODO understand how the Metallic BSDF works and properly model
+    # node.fresnel_type, node.inputs['IOR'], node.inputs['Extinction'] and
+    # node.inputs['Edge Tint']. Here I just guess based on the Principled BSDF.
+    specular = 0.5
+
+    # convert specular to ior for fresnel i.e. invert
+    # specular = ((ior - 1) / (ior + 1))**2 / 0.08
+    x = sqrt(specular * 0.08)
+    specular_ior = (1 + x) / (1 - x)
+
+    # don't handle reflection and refraction if they have roughness
+    roughness = node.inputs['Roughness'].default_value
+    if roughness != 0:
+        return None  # no diffuse => no caustic or caustic tracing at all
+
+    white = Color((1.0, 1.0, 1.0))
+
+    # diffuse, reflection and possibly refraction
+    def surface_shader(ray_direction, normal):
+        # facing * metallic tinted reflection via fresnel
+        reflectivity = fresnel(ray_direction, normal, specular_ior)
+        refle_tint = (1 - reflectivity) * color
+
+        # TODO is tint via facing neccessary or is white (facing = 1) enough?
+        incoming = -ray_direction
+        facing = 1 - abs(normal.dot(incoming))  # layer weight, blend = 0.5
+        refle_tint += white * reflectivity * facing
+
+        interactions = []
+
+        if refle_tint.v > 0:
+            # some light is reflected
+            refle = ray_direction.reflect(normal)
+            interactions.append(Interaction('REFLECT', refle, refle_tint))
 
         return interactions
 
@@ -489,6 +536,7 @@ setup_shader_from_node = {
     'BSDF_REFRACTION': setup_refraction,
     'BSDF_GLASS': setup_glass,
     'BSDF_PRINCIPLED': setup_principled,
+    'BSDF_METALLIC': setup_metallic,
     'MIX_SHADER': setup_mix,
     'ADD_SHADER': setup_add,
     # holdout and emission shader stop raypath, but don't show caustics
@@ -499,11 +547,16 @@ setup_shader_from_node = {
 #     BSDF_ANISOTROPIC
 #     BSDF_HAIR
 #     BSDF_HAIR_PRINCIPLED
+#     BSDF_SHEEN
 #     BSDF_TOON
 #     BSDF_TRANSLUCENT
 #     SUBSURFACE_SCATTERING
 #     BSDF_VELVET
 #     EEVEE_SPECULAR
+#     PRINCIPLED_VOLUME
+#     VOLUME_ABSORPTION
+#     VOLUME_SCATTER
+#     BSDF_RAY_PORTAL
 
 
 # main function to process materials ------------------------------------------
@@ -602,8 +655,13 @@ def get_caustic_material(light, parent_obj):
     add_nodes_for_cycles(mat.node_tree, light)
 
     # for EEVEE
-    mat.blend_method = 'BLEND'  # alpha blending
-    mat.shadow_method = 'NONE'  # no shadows needed
+    if bpy.app.version < (4, 2, 0):
+        mat.blend_method = 'BLEND'  # alpha blending
+        mat.shadow_method = 'NONE'  # no shadows needed
+    else:
+        # settings for EEVEE_NEXT
+        mat.surface_render_method = 'BLENDED'  # alpha blending
+        # shadow method is now an object visibility setting
     add_nodes_for_eevee(mat.node_tree, light, parent_obj.data.uv_layers.active)
 
     return mat
