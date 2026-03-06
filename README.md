@@ -21,7 +21,7 @@ EEVEE in 3D-View:
 
 ## Installation
 
-**Download link** (for Blender 3.2 to 4.4): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
+**Download link** (for Blender 3.2 to 5.2): https://github.com/markus-ebke/Blender-Lightsheet/releases/latest
 
 Download the .zip file.
 In Blender's preferences window go to the Add-ons section, click the dropdown menu in the topright corner and select `Install from Disk...`.
@@ -248,15 +248,19 @@ For development I suggest you follow these steps:
 
 ## Changelog
 
+**v1.4.3 (2026-03-06)**
+- Bugfix for Blender 5.0: Blender 3.5 changed a material setting, the old setting was only recently removed in version 5.0
+- Tested with Blender 4.2, 4.5, 5.0 and 5.2
+
 **v1.4.2 (2025-05-11)**
 - Bugfix: Blender 4.2 removed the shadow method for EEVEE from the material, creating a caustic would result in an error in 4.2 and above
 - Include parsing of Metallic BSDF (added in Blender 4.3)
-- Test with Blender 4.4
+- Tested with Blender 4.4
 
 **v1.4.1 (2024-08-30)**
 - Fix that caustics would not be visible in EEVEE
 - Convert to a Blender extension
-- Test with Blender 4.2
+- Tested with Blender 4.2
 
 **v1.4 (2024-05-01)**
 - Update for Blender 4.1

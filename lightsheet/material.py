@@ -647,7 +647,9 @@ def get_caustic_material(light, parent_obj):
 
     # setup material
     mat = bpy.data.materials.new(mat_name)
-    mat.cycles.sample_as_light = False  # disable multiple-importance sampling
+    if bpy.app.version < (3, 5, 0):
+        # disable multiple-importance sampling
+        mat.cycles.sample_as_light = False
     mat.use_nodes = True
     mat.node_tree.nodes.clear()
 

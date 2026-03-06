@@ -147,7 +147,7 @@ class LIGHTSHEET_OT_finalize_caustics(Operator):
 
         layout.prop(self, "fix_overlap")
         if self.fix_overlap:
-            msg = "FIXING OVERLAPS IS SLOW AND USES LOTS OF RAM!"
+            msg = "FIXING OVERLAPS IS SLOW & RAM INTENSIVE!"
             layout.label(text=msg, icon='ERROR')
 
     def execute(self, context):
